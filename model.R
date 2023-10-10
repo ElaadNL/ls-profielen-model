@@ -1,3 +1,8 @@
+library(data.table)
+library(dplyr)
+library(lubridate)
+library(MALDIquant)
+
 ### Retrieve historical sessions ###
 # Description
 # This function retrieves historical sessions from the Postgres DB with the following variables
@@ -155,10 +160,7 @@ sample_annual_endemand <- function(profile_type, charging_location, n_runs, year
 #
 # Returns
 #   sample (dataframe): dataframe containing the weekly energy demand data
-sample_seasonality <- function(annual_energy_demand, n_runs) {
-  # Read seasonal energy demand distribution table
-  season_dist <- readRDS("data/seasonality_distribution.rds")
-  
+sample_seasonality <- function(season_dist, annual_energy_demand, n_runs) {
   # Random uniform distribution between min and max distribution of weekly energy demand relative to annual energy demand
   season_sample <- runif(nrow(season_dist) * n_runs, season_dist$energy_min, season_dist$energy_max)
   sample <- data.frame(season_sample)
@@ -188,7 +190,6 @@ sample_seasonality <- function(annual_energy_demand, n_runs) {
     dplyr::summarise(
       energy = sum(energy_week, na.rm = TRUE)
     )
-  print(sample_sum, n=n_runs)
   
   return (sample)
 }
@@ -232,7 +233,6 @@ sample_sessions <- function(sessions, sessions_week, season_sample, profile_type
     dplyr::summarise(
       energy = sum(energy, na.rm = TRUE)
     )
-  print(sample_sum)
   
   return (sample)
 }
@@ -535,10 +535,10 @@ create_profile <- function(samples, n_runs) {
 
 ### Fill in the allowed capacity at each interval ###
 create_capacities_from_fractions <- function(
-  df_cp,
+  df_cps,
   max_power,
   base_capacity,
-  allowed_capacity_fractions,
+  allowed_capacity_fractions
 ) {
   
   # Interpolate the capacity fractions to the time intervals as they may have a different time scale
@@ -556,32 +556,30 @@ create_capacities_from_fractions <- function(
   # Determine the capacities, equal to the flex power at each interval plus the base capacity
   capacities <- capacity_fractions * max_flex_power + base_capacity
   
-  df_cp$capacities <- capacities
+  df_cps$capacities <- capacities
   
-  return (df_cp)
+  return (df_cps)
 }
 
 
 ### Distribute the overcapacity to later intervals ###
-distribute_overcapacity <- function(
-  df_cp,
-) {
+distribute_overcapacity <- function(df_cps) {
   # Calculate initial remainders
-  df_cp <- df_cp %>%
+  df_cps <- df_cps %>%
     group_by(run_id) %>%
     dplyr::mutate(
       remainder = max(power - capacity, 0),
     )
   
-  while (sum(df_cp$remainder) > 0) {
-    df_cp <- df_cp %>%
+  while (sum(df_cps$remainder) > 0) {
+    df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
         power = min(power, capacity)
       )
     
     # Shift remainders by one interval
-    df_cp <- df_cp %>%
+    df_cps <- df_cps %>%
       group_by(run_id) %>%
       arrange(date_time) %>%
       dplyr::mutate(
@@ -589,24 +587,24 @@ distribute_overcapacity <- function(
       )
     
     # Update power rate by adding the shifted remainders
-    df_cp <- df_cp %>%
+    df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
         power = power + remainder
       )
     
     # Recalculate remainders
-    df_cp <- df_cp %>%
+    df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
         remainder = pmax(power - capacity, 0)
       )
     
-    df_cp <- df_cp[df_cp$date_time <= "2022-12-31 23:59:59",]
+    df_cps <- df_cps[df_cps$date_time <= "2022-12-31 23:59:59",]
   }
-  df_cp <- df_cp[,c("run_id", "date_time", "time", "power", "n")]
+  df_cps <- df_cps[,c("run_id", "date_time", "time", "power", "n")]
   
-  return (df_cp)
+  return (df_cps)
 }
 
 
@@ -638,7 +636,6 @@ simulate <- function(
   kW = 11,
   ev_cs_ratio = 3,
   regular_profile = TRUE,
-  dashboard = TRUE,
   
   # 4kW is the base capacity as defined by "Slim laden voor iedereen 2022 - 2025"
   base_capacity = 4,
@@ -647,10 +644,13 @@ simulate <- function(
   max_capacity = (3 * 25 * 230) / 1000,
   
   capacity_fractions_path = "data/capacity_fractions.csv",
+  season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
+  # Read files
+  season_dist <- readRDS(season_dist_path)
   
   annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
-  season_sample <- sample_seasonality(annual_energy_demand, n_runs)
+  season_sample <- sample_seasonality(season_dist, annual_energy_demand, n_runs)
   session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
   session_sample <- calculate_intervals(session_sample, kW)
   session_sample <- convert_samples(session_sample, kW)
@@ -664,10 +664,10 @@ simulate <- function(
     df_cps$capacity <- kW
   } else {
     capacity_fractions = read.csv(capacity_fractions_path)
-    df_cps <- create_capacities_from_fractions(df_cp, kW, capacity_fractions)
+    df_cps <- create_capacities_from_fractions(df_cps, kW, capacity_fractions)
   }
   
-  df_cp <- distribute_overcapacity(df_cp)
+  df_cps <- distribute_overcapacity(df_cps)
   
   df_cp <- df_cps %>%
     dplyr::group_by(date_time) %>%
