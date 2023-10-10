@@ -533,54 +533,51 @@ create_profile <- function(samples, n_runs) {
 }
 
 
-### Correct power based on capacity ###
-# Description
-# This function corrects power based on the capacity limits of a charging station and based on charging rate limits.
-# For the regular profile the charging rate limit is assumed to be 11 kW. For the 'netbewust profile' the charging
-# rate limit is reduced to 4 kW during peak hours (17.00 - 23.00), whereafter it's gradually being increased again
-# to 11 kW
-#
-# Args
-#   df_cp (dataframe): dataframe containing charging profiles
-#   regular_profile (boolean): whether we simulate a regular profile or 'netbewust' profile
-#   kW (double): maximum power rate for each session
-#
-# Returns
-#   df_cp (dataframe): dataframe containing charging profiles
-correct_power <- function(df_cp, regular_profile, kW) {
-  if (regular_profile) {
-    time <- format(seq(ymd_hm('2022-01-01 06:00'), ymd_hm('2022-01-02 05:45'), by = '15 mins'), format="%H:%M")
-    capacity <- c(rep(kW, 96))
-    profile <- data.frame(time, capacity)
-  } else {
-    # Creating cascade profile table
-    time <- format(seq(ymd_hm('2022-01-01 06:00'), ymd_hm('2022-01-02 05:45'), by = '15 mins'), format="%H:%M")
-    capacity <- c()
-    for (i in 1:27) {
-      capacity[i] <- 4 + i * .25
-    }
-    capacity <- capacity/2
-    capacity <- pmin(c(rep(kW, 44), rep(4, 25), capacity) * 2, 17.25)
-    profile <- data.frame(time, capacity)
-  }
+### Fill in the allowed capacity at each interval ###
+create_capacities_from_fractions <- function(
+  df_cp,
+  max_power,
+  base_capacity,
+  allowed_capacity_fractions,
+) {
   
+  # Interpolate the capacity fractions to the time intervals as they may have a different time scale
+  capacity_fractions <- data.frame(
+    approx(
+      allowed_capacity_fractions$time,
+      allowed_capacity_fractions$capacity_fraction,
+      xout = df_cp$time,
+      rule = 2, method = "linear", ties = mean)
+  )
   
-  # Joining charging profile with cascade profile
-  df_cp <- merge(df_cp, profile, left.x = TRUE, by = "time")
+  # Determine the maximum possible flex power,
+  # which defines maximum amount of additional capacity
+  max_flex_power <- max(max_power - base_capacity, 0)
+  # Determine the capacities, equal to the flex power at each interval plus the base capacity
+  capacities <- capacity_fractions * max_flex_power + base_capacity
   
+  df_cp$capacities <- capacities
+  
+  return (df_cp)
+}
+
+
+### Distribute the overcapacity to later intervals ###
+distribute_overcapacity <- function(
+  df_cp,
+) {
   # Calculate initial remainders
   df_cp <- df_cp %>%
     group_by(run_id) %>%
     dplyr::mutate(
-      remainder = pmax(power - capacity, 0),
+      remainder = max(power - capacity, 0),
     )
   
   while (sum(df_cp$remainder) > 0) {
-    print(sum(df_cp$remainder))
     df_cp <- df_cp %>%
       group_by(run_id) %>%
       dplyr::mutate(
-        power = pmin(power, capacity)
+        power = min(power, capacity)
       )
     
     # Shift remainders by one interval
@@ -631,60 +628,53 @@ correct_power <- function(df_cp, regular_profile, kW) {
 #
 # Returns
 #   A list containing the individual charging profiles and aggregated charging profile
-simulate <- function(sessions, sessions_week, profile_type = "Electric Vehicle", charging_location = "public", n_runs = 100, year = 2023, kW = 11, ev_cs_ratio = 3, regular_profile = TRUE, dashboard = TRUE) {
-  ### Simulation pipeline ###
+simulate <- function(
+  sessions,
+  sessions_week,
+  profile_type = "Electric Vehicle",
+  charging_location = "public",
+  n_runs = 100,
+  year = 2023,
+  kW = 11,
+  ev_cs_ratio = 3,
+  regular_profile = TRUE,
+  dashboard = TRUE,
   
-  if (dashboard) {
-    withProgress(message = "Running simulation", value = 0, {
-      incProgress(amount = 1/7, detail = paste("Calculate energy demand (14%)"))
-      annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
-      
-      season_sample <- sample_seasonality(annual_energy_demand, n_runs)
-      
-      incProgress(amount = 1/7, detail = paste("Sample sessions (29%)"))
-      session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
-      session_sample <- calculate_intervals(session_sample, kW)
-      session_sample <- convert_samples(session_sample, kW)
-      
-      incProgress(amount = 1/7, detail = paste("Calculate metrics (43%)"))
-      session_sample <- flatten_samples(session_sample)
-      session_sample <- calculate_power(session_sample, kW)
-      session_sample <- adjust_overlapping_sessions(session_sample)
-      session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
-      
-      incProgress(amount = 1/7, detail = paste("Create profiles (57%)"))
-      df_cps <- create_profile(session_sample, n_runs)
-      
-      incProgress(amount = 1/7, detail = paste("Correct power (71%)"))
-      df_cps <- correct_power(df_cps, regular_profile, kW)
-      
-      incProgress(amount = 1/7, detail = paste("Aggregate profiles (86%)"))
-      df_cp <- df_cps %>%
-        dplyr::group_by(date_time) %>%
-        dplyr::summarise(
-          power = sum(power, na.rm = TRUE),
-          n = sum(n, na.rm = TRUE)
-        )
-    })
+  # 4kW is the base capacity as defined by "Slim laden voor iedereen 2022 - 2025"
+  base_capacity = 4,
+  # P = U * I, and divide by 1000 to get kW
+  # In general it is assumed that CS' are connected by three-phase 25A cables
+  max_capacity = (3 * 25 * 230) / 1000,
+  
+  capacity_fractions_path = "data/capacity_fractions.csv",
+) {
+  
+  annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
+  season_sample <- sample_seasonality(annual_energy_demand, n_runs)
+  session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
+  session_sample <- calculate_intervals(session_sample, kW)
+  session_sample <- convert_samples(session_sample, kW)
+  session_sample <- flatten_samples(session_sample)
+  session_sample <- calculate_power(session_sample, kW)
+  session_sample <- adjust_overlapping_sessions(session_sample)
+  session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
+  df_cps <- create_profile(session_sample, n_runs)
+  
+  if (regular_profile) {
+    df_cps$capacity <- kW
   } else {
-    annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
-    season_sample <- sample_seasonality(annual_energy_demand, n_runs)
-    session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
-    session_sample <- calculate_intervals(session_sample, kW)
-    session_sample <- convert_samples(session_sample, kW)
-    session_sample <- flatten_samples(session_sample)
-    session_sample <- calculate_power(session_sample, kW)
-    session_sample <- adjust_overlapping_sessions(session_sample)
-    session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
-    df_cps <- create_profile(session_sample, n_runs)
-    df_cps <- correct_power(df_cps, regular_profile, kW)
-    df_cp <- df_cps %>%
-      dplyr::group_by(date_time) %>%
-      dplyr::summarise(
-        power = sum(power, na.rm = TRUE),
-        n = sum(n, na.rm = TRUE)
-      )
+    capacity_fractions = read.csv(capacity_fractions_path)
+    df_cps <- create_capacities_from_fractions(df_cp, kW, capacity_fractions)
   }
+  
+  df_cp <- distribute_overcapacity(df_cp)
+  
+  df_cp <- df_cps %>%
+    dplyr::group_by(date_time) %>%
+    dplyr::summarise(
+      power = sum(power, na.rm = TRUE),
+      n = sum(n, na.rm = TRUE)
+    )
   
   return (list("individual" = df_cps, "aggregated" = df_cp))
 }
