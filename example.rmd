@@ -1,0 +1,43 @@
+---
+title: "Example of using the simulator"
+output: html_document
+date: "2023-10-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+source("model.R")
+```
+
+```{r}
+sessions_path = "data/Input/Den Haag/sessions.rds"
+sessions <- readRDS(sessions_path)
+sessions_week <- get_sessions_week(sessions, "Charging Station")
+```
+
+```{r}
+results <- simulate(
+  sessions,
+  sessions_week,
+  profile_type = "Charging Station",
+  regular_profile = FALSE,
+)
+```
+
+```{r}
+results$individual %>%
+  filter(run_id == 1) %>%
+  filter(n > 0)
+```
+
+
+```{r}
+library(plotly)
+
+results$individual %>%
+  filter(run_id==1) %>%
+  {plot_ly(x=.$date_time, y=.$power)}
+```
