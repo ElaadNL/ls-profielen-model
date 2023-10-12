@@ -3,6 +3,9 @@ library(dplyr)
 library(lubridate)
 library(MALDIquant)
 
+source("capacity_fractions.R")
+
+
 ### Retrieve historical sessions ###
 # Description
 # This function retrieves historical sessions from the Postgres DB with the following variables
@@ -536,27 +539,25 @@ create_profile <- function(samples, n_runs) {
 ### Fill in the allowed capacity at each interval ###
 create_capacities_from_fractions <- function(
   df_cps,
-  max_power,
+  max_capacity,
   base_capacity,
   allowed_capacity_fractions
 ) {
-  
-  # Interpolate the capacity fractions to the time intervals as they may have a different time scale
-  capacity_fractions <- data.frame(
-    approx(
-      allowed_capacity_fractions$time,
-      allowed_capacity_fractions$capacity_fraction,
-      xout = df_cp$time,
-      rule = 2, method = "linear", ties = mean)
-  )
+  # Map the capacity fractions to the right date-time index
+  df_cps <- df_cps %>%
+    group_by(run_id) %>%
+    mutate(capacity=approx(
+      x=allowed_capacity_fractions$date_time,
+      y=allowed_capacity_fractions$value,
+      xout=date_time,
+    )$y) %>%
+    ungroup()
   
   # Determine the maximum possible flex power,
   # which defines maximum amount of additional capacity
-  max_flex_power <- max(max_power - base_capacity, 0)
+  max_flex_capacity <- pmax(max_capacity - base_capacity, 0)
   # Determine the capacities, equal to the flex power at each interval plus the base capacity
-  capacities <- capacity_fractions * max_flex_power + base_capacity
-  
-  df_cps$capacities <- capacities
+  df_cps$capacity <- df_cps$capacity * max_flex_capacity + base_capacity
   
   return (df_cps)
 }
@@ -568,14 +569,14 @@ distribute_overcapacity <- function(df_cps) {
   df_cps <- df_cps %>%
     group_by(run_id) %>%
     dplyr::mutate(
-      remainder = max(power - capacity, 0),
+      remainder = pmax(power - capacity, 0),
     )
   
   while (sum(df_cps$remainder) > 0) {
     df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
-        power = min(power, capacity)
+        power = pmin(power, capacity)
       )
     
     # Shift remainders by one interval
@@ -633,17 +634,17 @@ simulate <- function(
   charging_location = "public",
   n_runs = 100,
   year = 2023,
-  kW = 11,
+  by = "15 mins",
+  kW = 11.0,
   ev_cs_ratio = 3,
   regular_profile = TRUE,
-  
   # 4kW is the base capacity as defined by "Slim laden voor iedereen 2022 - 2025"
   base_capacity = 4,
   # P = U * I, and divide by 1000 to get kW
   # In general it is assumed that CS' are connected by three-phase 25A cables
   max_capacity = (3 * 25 * 230) / 1000,
   
-  capacity_fractions_path = "data/capacity_fractions.csv",
+  capacity_fractions_path = NULL,
   season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
   # Read files
@@ -663,18 +664,20 @@ simulate <- function(
   if (regular_profile) {
     df_cps$capacity <- kW
   } else {
-    capacity_fractions = read.csv(capacity_fractions_path)
-    df_cps <- create_capacities_from_fractions(df_cps, kW, capacity_fractions)
+    from = as_datetime(ISOdate(2021, 12, 31, hour=0, min=0, sec=0), "CET")
+    to = as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
+    capacity_fractions = create_capacity_fractions_netbewust_laden(from, to, by)
+    df_cps <- create_capacities_from_fractions(df_cps, max_capacity, base_capacity, capacity_fractions)
   }
   
   df_cps <- distribute_overcapacity(df_cps)
-  
+
   df_cp <- df_cps %>%
     dplyr::group_by(date_time) %>%
     dplyr::summarise(
       power = sum(power, na.rm = TRUE),
       n = sum(n, na.rm = TRUE)
     )
-  
+
   return (list("individual" = df_cps, "aggregated" = df_cp))
 }
