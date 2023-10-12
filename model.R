@@ -537,6 +537,17 @@ create_profile <- function(samples, n_runs) {
 
 
 ### Fill in the allowed capacity at each interval ###
+# Description
+# This function calculates for each interval and charging station the available capacity based on the base capacity,
+# the maximum rated capacity of charging stations, and the amount of allowed extra capacity on top of the base capacity.
+# The allowed capacity is determined by finding the interpolated capacity fraction at a given timestamp, multiplying
+# it with the maximum flex capacity at that point (max_capacity - base_capacity), and adding it to the base capacity.
+#
+# Args
+#   df_cps (dataframe): Dataframe containing n charging profiles
+#   max_capacity (double): The maximum capacity of the charging station
+#   base_capacity (double): The base capacity which is always available to connected vehicles
+#   allowed_capacity_fractions (dataframe): Dataframe containing the allowed capacity fractions per timestamp
 create_capacities_from_fractions <- function(
   df_cps,
   max_capacity,
@@ -564,6 +575,15 @@ create_capacities_from_fractions <- function(
 
 
 ### Distribute the overcapacity to later intervals ###
+# Description
+# When at a given interval and charging point station power is used than available (overcapacity), that power is
+# distributed to later intervals.
+#
+# Args
+#   df_cps (dataframe): dataframe containing `n` charging profiles
+#
+# Returns
+#   A dataframe containing `n` charging profiles with overcapacity distributed to later intervals
 distribute_overcapacity <- function(df_cps) {
   # Calculate initial remainders
   df_cps <- df_cps %>%
@@ -635,6 +655,7 @@ simulate <- function(
   n_runs = 100,
   year = 2023,
   by = "15 mins",
+  # 11kW is the assumed maximum charging rate of an EV using three-phase AC charging
   kW = 11.0,
   ev_cs_ratio = 3,
   regular_profile = TRUE,
@@ -664,9 +685,9 @@ simulate <- function(
   if (regular_profile) {
     df_cps$capacity <- kW
   } else {
-    from = as_datetime(ISOdate(2021, 12, 31, hour=0, min=0, sec=0), "CET")
-    to = as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
-    capacity_fractions = create_capacity_fractions_netbewust_laden(from, to, by)
+    from <- as_datetime(ISOdate(2021, 12, 31, hour=0, min=0, sec=0), "CET")
+    to <- as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
+    capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by)
     df_cps <- create_capacities_from_fractions(df_cps, max_capacity, base_capacity, capacity_fractions)
   }
   
