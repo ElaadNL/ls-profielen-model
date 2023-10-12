@@ -16,11 +16,11 @@ create_capacity_fractions_netbewust_laden <- function(
   from,
   to,
   by="15 mins",
-  path="capacity_fractions_netbewust_laden.csv"
+  path="capacity_fractions_netbewust_laden.csv",
+  floor_window_start = 17,
+  floor_window_end = 23,
+  slope_end = 6,
 ) {
-  floor_window_start = 17
-  floor_window_end = 23
-  slope_end = 6
   slope_duration = 24 - floor_window_end + slope_end
   
   date_time <- seq(from=from, to=to, by=by)
