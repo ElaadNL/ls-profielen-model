@@ -9,6 +9,24 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
+library(plotly)
+```
+
+## Capacity fractions example
+
+```{r}
+source("capacity_fractions.R")
+```
+
+```{r}
+create_capacity_fractions_netbewust_laden(as_datetime("2023-01-01"), as_datetime("2024-01-01")) %>%
+  filter(date_time >= "2023-01-01", date_time <= "2023-01-08") %>%
+  {plot_ly(x=.$date_time, y=.$value)}
+```
+
+## Model example
+
+```{r}
 source("model.R")
 ```
 
@@ -33,10 +51,7 @@ results$individual %>%
   filter(n > 0)
 ```
 
-
 ```{r}
-library(plotly)
-
 results$individual %>%
   filter(run_id==1) %>%
   {plot_ly(x=.$date_time, y=.$power)}

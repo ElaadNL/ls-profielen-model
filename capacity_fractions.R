@@ -48,9 +48,24 @@ create_capacity_fractions_netbewust_laden <- function(
   to,
   by="15 mins",
   path="capacity_fractions_netbewust_laden.csv",
-  times=list(list(floor_start=17, floor_end=23, pre_slope=1, post_slope=7)),
+  times=list(list(floor_start=17, floor_end=23, pre_slope=NULL, post_slope=7)),
   write=FALSE
 ) {
+  ### Create capacity fractions in line with definitions from "Netbewust laden"
+  #
+  # The netbewust laden capacity fractions are defined by a list of "floors". Each floor is defined
+  # by a start and end time between which the allowed additional capacity is 0. Everywhere else the
+  # allowed capacity is 1. A pre slope and post slope can be optionally defined to enable a more
+  # gradual decrease/increase of the allowed capacity. The configuration is the repeated for each
+  # day between the `from` and `to` date.
+  #
+  # Args
+  #   from (datetime): The start date
+  #   to (datetime): The end date
+  #   by (string): The interval size
+  #   path (string): Path to write the CSV to
+  #   write (bool): Whether to write the CSV file
+  #
   date_time <- seq(from=from, to=to, by=by)
   df <- tibble(date_time=date_time) %>% mutate(time=format(date_time, format="%H:%M:%S"))
 
@@ -84,7 +99,6 @@ create_capacity_fractions_netbewust_laden <- function(
     
     one_day[one_day$time == floor_start | one_day$time == floor_end, "value"] <- 0.0
     one_day[one_day$time == pre_slope | one_day$time == post_slope, "value"] <- 1.0
-    print(one_day[one_day$time == post_slope,])
   }
   
   one_day <- one_day %>%
