@@ -97,8 +97,8 @@ create_capacity_fractions_netbewust_laden <- function(
       post_slope <- add_difference_to_timestring(floor_end, diff)
     }
     
-    one_day[one_day$time == floor_start | one_day$time == floor_end, "value"] <- 0.0
     one_day[one_day$time == pre_slope | one_day$time == post_slope, "value"] <- 1.0
+    one_day[one_day$time == floor_start | one_day$time == floor_end, "value"] <- 0.0
   }
   
   one_day <- one_day %>%
