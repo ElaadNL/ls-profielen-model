@@ -659,12 +659,12 @@ simulate <- function(
   kW = 11.0,
   ev_cs_ratio = 3,
   regular_profile = TRUE,
-  # 4kW is the base capacity as defined by "Slim laden voor iedereen 2022 - 2025"
-  base_capacity = 4,
+  # 4kW is the base capacity per CP as defined by "Slim laden voor iedereen 2022 - 2025"
+  base_capacity = 2*4,
   # P = U * I, and divide by 1000 to get kW
   # In general it is assumed that CS' are connected by three-phase 25A cables
   max_capacity = (3 * 25 * 230) / 1000,
-  
+  times=list(list(floor_start=17, floor_end=23, pre_slope=NULL, post_slope=7)),
   capacity_fractions_path = NULL,
   season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
@@ -687,7 +687,7 @@ simulate <- function(
   } else {
     from <- as_datetime(ISOdate(2021, 12, 31, hour=0, min=0, sec=0), "CET")
     to <- as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
-    capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by)
+    capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by, times=times)
     df_cps <- create_capacities_from_fractions(df_cps, max_capacity, base_capacity, capacity_fractions)
   }
   
