@@ -53,8 +53,11 @@ create_capacity_fractions_netbewust_laden <- function(
   #   to (datetime): The end date (make sure that is has the correct timezone!)
   #   by (string): The interval size
   #   path (string): Path to write the CSV to
+  #   times (list[list]): A list of named lists containing the floor definitions
   #   write (bool): Whether to write the CSV file
-  #
+  
+  # Create datetimes and add two days on each end as padding
+  # This makes sure interpolation happens correctly on the edges
   date_time <- seq(from=from - days_in_seconds(1), to=to + days_in_seconds(1), by=by)
   df <- tibble(date_time=date_time) %>% mutate(time=format(date_time, format="%H:%M:%S"))
   
