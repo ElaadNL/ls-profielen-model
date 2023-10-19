@@ -70,11 +70,11 @@ create_capacity_fractions_netbewust_laden <- function(
     
     # Determine the interval before the floor start at which the pre slope starts
     if (is.null(pre_slope)) pre_slope <- 1
-    else pre_slope <- pre_slope * intervals_per_hour
+    else pre_slope <- floor(pre_slope * intervals_per_hour)
     
     # Determine the interval after the floor end at which the post slope ends
     if (is.null(post_slope)) post_slope <- 1
-    else post_slope <- post_slope * intervals_per_hour
+    else post_slope <- floor(post_slope * intervals_per_hour)
     
     # Set only the values at the floor start/end and pre/post slope times
     # The missing values will be interpolated
