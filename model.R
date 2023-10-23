@@ -557,18 +557,19 @@ create_capacities_from_fractions <- function(
   # Map the capacity fractions to the right date-time index
   df_cps <- df_cps %>%
     group_by(run_id) %>%
-    mutate(capacity=approx(
+    mutate(allowed_capacity_fraction=approx(
       x=allowed_capacity_fractions$date_time,
       y=allowed_capacity_fractions$value,
       xout=date_time,
     )$y) %>%
-    ungroup()
-  
-  # Determine the maximum possible flex power,
-  # which defines maximum amount of additional capacity
-  max_flex_capacity <- pmax(max_capacity - base_capacity, 0)
-  # Determine the capacities, equal to the flex power at each interval plus the base capacity
-  df_cps$capacity <- df_cps$capacity * max_flex_capacity + base_capacity
+    ungroup() %>%
+    mutate(
+      # The flex power is equal to the max minus base capacity (per EV)
+      max_flex_capacity=max_capacity - base_capacity * n,
+      # Determine the capacities, equal to the flex power plus the base capacity (per EV)
+      capacity=allowed_capacity_fraction * max_flex_capacity + base_capacity * n
+    ) %>%
+    select(-c(allowed_capacity_fraction, max_flex_capacity))
   
   return (df_cps)
 }
@@ -589,10 +590,12 @@ distribute_overcapacity <- function(df_cps) {
   df_cps <- df_cps %>%
     group_by(run_id) %>%
     dplyr::mutate(
-      remainder = pmax(power - capacity, 0),
+      # We can only distribute the remainder if the vehicles are still connected
+      remainder = ifelse(n > 0, pmax(power - capacity, 0), 0)
     )
   
   while (sum(df_cps$remainder) > 0) {
+    # Calculate required power
     df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
@@ -604,7 +607,8 @@ distribute_overcapacity <- function(df_cps) {
       group_by(run_id) %>%
       arrange(date_time) %>%
       dplyr::mutate(
-        remainder = dplyr::lag(remainder, default = 0)
+        # We can only distribute the remainder if the vehicles are still charging
+        remainder = ifelse(n > 0, dplyr::lag(remainder, default = 0), 0)
       )
     
     # Update power rate by adding the shifted remainders
@@ -660,7 +664,7 @@ simulate <- function(
   ev_cs_ratio = 3,
   regular_profile = TRUE,
   # 4kW is the base capacity per CP as defined by "Slim laden voor iedereen 2022 - 2025"
-  base_capacity = 2*4,
+  base_capacity = 4,
   # P = U * I, and divide by 1000 to get kW
   # In general it is assumed that CS' are connected by three-phase 25A cables
   max_capacity = (3 * 25 * 230) / 1000,
@@ -681,7 +685,7 @@ simulate <- function(
   session_sample <- adjust_overlapping_sessions(session_sample)
   session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
   df_cps <- create_profile(session_sample, n_runs)
-  
+
   if (regular_profile) {
     df_cps$capacity <- kW
   } else {
@@ -690,7 +694,7 @@ simulate <- function(
     capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by, times=times)
     df_cps <- create_capacities_from_fractions(df_cps, max_capacity, base_capacity, capacity_fractions)
   }
-  
+
   df_cps <- distribute_overcapacity(df_cps)
 
   df_cp <- df_cps %>%
