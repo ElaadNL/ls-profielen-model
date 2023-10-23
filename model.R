@@ -590,10 +590,12 @@ distribute_overcapacity <- function(df_cps) {
   df_cps <- df_cps %>%
     group_by(run_id) %>%
     dplyr::mutate(
-      remainder = pmax(power - capacity, 0),
+      # We can only distribute the remainder if the vehicles are still connected
+      remainder = ifelse(n > 0, pmax(power - capacity, 0), 0)
     )
   
   while (sum(df_cps$remainder) > 0) {
+    # Calculate required power
     df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
@@ -605,7 +607,8 @@ distribute_overcapacity <- function(df_cps) {
       group_by(run_id) %>%
       arrange(date_time) %>%
       dplyr::mutate(
-        remainder = dplyr::lag(remainder, default = 0)
+        # We can only distribute the remainder if the vehicles are still charging
+        remainder = ifelse(n > 0, dplyr::lag(remainder, default = 0), 0)
       )
     
     # Update power rate by adding the shifted remainders
