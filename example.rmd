@@ -40,9 +40,12 @@ sessions_week <- get_sessions_week(sessions, "Charging Station")
 ```
 
 ```{r}
+source("model.R")
+
 results <- simulate(
   sessions,
   sessions_week,
+  n_runs=30,
   profile_type = "Charging Station",
   regular_profile = FALSE,
 )
@@ -56,6 +59,7 @@ results$individual %>%
 
 ```{r}
 results$individual %>%
-  filter(run_id==1) %>%
-  {plot_ly(x=.$date_time, y=.$power)}
+  filter(run_id==2) %>%
+  filter(date_time > "2022-10-01", date_time < "2022-12-01", power > 0) %>%
+  {plot_ly(x=.$date_time, y=.$power, color=.$n)}
 ```

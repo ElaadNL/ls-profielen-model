@@ -406,8 +406,6 @@ calculate_power <- function(samples, kW) {
     group_by(session_id) %>%
     mutate(power=ifelse(row_number() <= n_intervals, power, 0))
   
-  # samples[samples$energy <= kW,]$power <- kW
-  
   return (samples)
 }
 
