@@ -314,20 +314,17 @@ convert_samples <- function(samples, kW) {
       card_id,
       cs_id,
       start_datetime,
+      end_datetime,
       energy,
       week,
       n_intervals
     ) %>%
     dplyr::mutate(
       session_id = row_number(),
-      start_datetime = round_date(start_datetime, "15 mins"),
-      end_datetime = start_datetime + lubridate::minutes(n_intervals * 15),
-      end_datetime_min15 = end_datetime - lubridate::minutes(15)
-    ) %>%
-    filter(
-      !is.na(end_datetime_min15),
-      end_datetime > start_datetime
-    )
+      start_datetime = floor_date(start_datetime, "15 mins"),
+      end_datetime = ceiling_date(pmin(end_datetime, start_datetime + 3600*24), "15 mins"),
+    )  %>%
+    filter(end_datetime > start_datetime)
   
   return (samples)
 }
@@ -350,9 +347,10 @@ flatten_samples <- function(samples) {
     card_id,
     cs_id,
     # When flattening the sessions we need end_datetime_min15, otherwise we add 1 interval too much
-    date_time = seq(start_datetime, end_datetime_min15, by = "15 mins"),
+    date_time = seq(start_datetime, end_datetime, by = "15 mins"),
     week,
-    energy
+    energy,
+    n_intervals
   ), by = 1:nrow(samples)]
   
   samples <- samples %>%
@@ -368,7 +366,8 @@ flatten_samples <- function(samples) {
       week,
       wday,
       time,
-      energy
+      energy,
+      n_intervals
     )
   
   return (samples)
@@ -396,14 +395,16 @@ calculate_power <- function(samples, kW) {
     group_by(session_id) %>%
     dplyr::mutate(
       interval = row_number(),
-      interval = interval/n()
+      interval = pmin(interval / n_intervals, 1)
     )
   
   # Match sampled sessions with session power distribution based on normalized intervals
   idx <- match.closest(samples$interval, power_dist$x)
   samples$power <- power_dist[idx,]$kW
   
-  samples[samples$energy <= kW,]$power <- kW
+  samples <- samples %>%
+    group_by(session_id) %>%
+    mutate(power=ifelse(row_number() <= n_intervals, power, 0))
   
   return (samples)
 }
