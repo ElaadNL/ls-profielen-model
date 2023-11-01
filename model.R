@@ -600,7 +600,10 @@ distribute_overcapacity <- function(df_cps) {
     group_by(run_id) %>%
     dplyr::mutate(
       # We can only distribute the remainder if the vehicles are still connected
-      remainder = ifelse(n > 0, pmax(power - capacity, 0), 0)
+      overcapacity = power - capacity,
+      remainder = pmax(power - capacity, 0),
+      not_charged_sum = ifelse(n == 0, remainder, 0),
+      remainder = ifelse(n > 0, remainder, 0)
     )
   
   while (sum(df_cps$remainder) > 0) {
@@ -617,7 +620,7 @@ distribute_overcapacity <- function(df_cps) {
       arrange(date_time) %>%
       dplyr::mutate(
         # We can only distribute the remainder if the vehicles are still charging
-        remainder = ifelse(n > 0, dplyr::lag(remainder, default = 0), 0)
+        remainder = dplyr::lag(remainder, default = 0)
       )
     
     # Update power rate by adding the shifted remainders
@@ -626,17 +629,20 @@ distribute_overcapacity <- function(df_cps) {
       dplyr::mutate(
         power = power + remainder
       )
-    
-    # Recalculate remainders
+
     df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
-        remainder = pmax(power - capacity, 0)
+        remainder = pmax(power - capacity, 0),
+        not_charged_sum = ifelse(n == 0, not_charged_sum + remainder, not_charged_sum),
+        remainder = ifelse(n > 0, remainder, 0)
       )
+    
+    df_cps %>%
+      mutate(not_charged_sum <- ifelse(date_time == date_time[n()], 0, not_charged_sum))
     
     df_cps <- df_cps[df_cps$date_time <= "2022-12-31 23:59:59",]
   }
-  df_cps <- df_cps[,c("run_id", "date_time", "time", "power", "n")]
   
   return (df_cps)
 }
