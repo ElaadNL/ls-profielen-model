@@ -597,7 +597,7 @@ distribute_overcapacity <- function(df_cps) {
       # We can only distribute the remainder if the vehicles are still connected
       overcapacity = power - capacity,
       remainder = pmax(power - capacity, 0),
-      not_charged_sum = ifelse(n == 0, remainder, 0),
+      remainder_after_leave = ifelse(n == 0, remainder, 0),
       remainder = ifelse(n > 0, remainder, 0)
     )
   
@@ -628,12 +628,12 @@ distribute_overcapacity <- function(df_cps) {
       group_by(run_id) %>%
       dplyr::mutate(
         remainder = pmax(power - capacity, 0),
-        not_charged_sum = ifelse(n == 0, not_charged_sum + remainder, not_charged_sum),
+        remainder_after_leave = ifelse(n == 0, remainder_after_leave + remainder, remainder_after_leave),
         remainder = ifelse(n > 0, remainder, 0)
       )
     
     df_cps %>%
-      mutate(not_charged_sum <- ifelse(date_time == date_time[n()], 0, not_charged_sum))
+      mutate(remainder_after_leave <- ifelse(date_time == date_time[n()], 0, remainder_after_leave))
     
   }
   
@@ -703,11 +703,10 @@ simulate <- function(
     capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by, times=times)
     df_cps <- create_capacities_from_fractions(df_cps, max_capacity, base_capacity, capacity_fractions)
   }
-
-  print(df_cps)
   
   df_cps <- distribute_overcapacity(df_cps)
 
+  # Remove padding
   df_cps <- df_cps[df_cps$date_time >= "2022-01-01 00:00:00",]
   df_cps <- df_cps[df_cps$date_time <= "2022-12-31 23:59:59",]
   
