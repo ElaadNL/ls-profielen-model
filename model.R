@@ -355,9 +355,17 @@ flatten_samples <- function(samples) {
   
   samples <- samples %>%
     mutate(
-      wday = lubridate::wday(date_time),
+      wday = as.integer(lubridate::wday(date_time)),
       time = format(date_time, format = "%H:%M")
     ) %>%
+    # When the flattened session goes outside the week they are given they get chopped off.
+    # This can by adding to the week the difference between the smallest week for a session and the
+    # current week for each interval. It is assumed session are shorter than a week.
+    group_by(session_id) %>%
+    arrange(session_id, date_time) %>%
+    mutate(week=ifelse(wday < wday[1], week + 1, week)) %>%
+    ungroup() %>%
+    
     select(
       session_id,
       run_id,
@@ -685,6 +693,7 @@ simulate <- function(
   session_sample <- calculate_power(session_sample, kW)
   session_sample <- adjust_overlapping_sessions(session_sample)
   session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
+  
   df_cps <- create_profile(session_sample, n_runs)
 
   if (regular_profile) {
