@@ -355,7 +355,7 @@ flatten_samples <- function(samples) {
   
   samples <- samples %>%
     mutate(
-      wday = as.integer(lubridate::wday(date_time)),
+      wday = as.integer(lubridate::wday(date_time, week_start = 1)),
       time = format(date_time, format = "%H:%M")
     ) %>%
     # When the flattened session goes outside the week they are given they get chopped off.
@@ -365,7 +365,7 @@ flatten_samples <- function(samples) {
     arrange(session_id, date_time) %>%
     mutate(week=ifelse(wday < wday[1], week + 1, week)) %>%
     ungroup() %>%
-    
+    # 
     select(
       session_id,
       run_id,
@@ -512,7 +512,7 @@ create_profile <- function(samples, n_runs) {
   df_cp <- df_cp %>%
     mutate(
       week = isoweek(date_time),
-      wday = lubridate::wday(date_time, week_start = 1),
+      wday = lubridate::wday(date_time, week_start=1),
       time = format(date_time, format = "%H:%M"),
     )
   nrows_df_cp <- nrow(df_cp)
@@ -680,6 +680,7 @@ simulate <- function(
   capacity_fractions_path = NULL,
   season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
+  sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
   # Read files
   season_dist <- readRDS(season_dist_path)
   
