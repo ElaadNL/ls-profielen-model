@@ -355,9 +355,17 @@ flatten_samples <- function(samples) {
   
   samples <- samples %>%
     mutate(
-      wday = lubridate::wday(date_time),
+      wday = as.integer(lubridate::wday(date_time, week_start = 1)),
       time = format(date_time, format = "%H:%M")
     ) %>%
+    # When the flattened session goes outside the week they are given they get chopped off.
+    # This can by adding to the week the difference between the smallest week for a session and the
+    # current week for each interval. It is assumed session are shorter than a week.
+    group_by(session_id) %>%
+    arrange(session_id, date_time) %>%
+    mutate(week=ifelse(wday < wday[1], week + 1, week)) %>%
+    ungroup() %>%
+    # 
     select(
       session_id,
       run_id,
@@ -503,11 +511,9 @@ create_profile <- function(samples, n_runs) {
   # Add time related variables
   df_cp <- df_cp %>%
     mutate(
-      month = lubridate::month(date_time),
-      week = lubridate::week(date_time),
-      wday = lubridate::wday(date_time),
+      week = isoweek(date_time),
+      wday = lubridate::wday(date_time, week_start=1),
       time = format(date_time, format = "%H:%M"),
-      hour = lubridate::hour(date_time)
     )
   nrows_df_cp <- nrow(df_cp)
   
@@ -520,11 +526,10 @@ create_profile <- function(samples, n_runs) {
   df_cp <- merge(df_cp, samples, all.x = TRUE, by = c("run_id", "week", "wday", "time"))
   
   df_cp[is.na(df_cp)] <- 0
-  df_cp <- df_cp[df_cp$date_time >= "2022-01-01 00:00:00",]
   
-  # Sort charging profiles by date_time
+  # # Sort charging profiles by date_time
   df_cp <- df_cp %>%
-    arrange(date_time) %>%
+    arrange(run_id, date_time) %>%
     select(
       run_id,
       date_time,
@@ -532,8 +537,6 @@ create_profile <- function(samples, n_runs) {
       power,
       n
     )
-  
-  return (df_cp)
 }
 
 
@@ -592,7 +595,10 @@ distribute_overcapacity <- function(df_cps) {
     group_by(run_id) %>%
     dplyr::mutate(
       # We can only distribute the remainder if the vehicles are still connected
-      remainder = ifelse(n > 0, pmax(power - capacity, 0), 0)
+      overcapacity = power - capacity,
+      remainder = pmax(power - capacity, 0),
+      remainder_after_leave = ifelse(n == 0, remainder, 0),
+      remainder = ifelse(n > 0, remainder, 0)
     )
   
   while (sum(df_cps$remainder) > 0) {
@@ -608,8 +614,7 @@ distribute_overcapacity <- function(df_cps) {
       group_by(run_id) %>%
       arrange(date_time) %>%
       dplyr::mutate(
-        # We can only distribute the remainder if the vehicles are still charging
-        remainder = ifelse(n > 0, dplyr::lag(remainder, default = 0), 0)
+        remainder = dplyr::lag(remainder, default = 0)
       )
     
     # Update power rate by adding the shifted remainders
@@ -618,17 +623,19 @@ distribute_overcapacity <- function(df_cps) {
       dplyr::mutate(
         power = power + remainder
       )
-    
-    # Recalculate remainders
+
     df_cps <- df_cps %>%
       group_by(run_id) %>%
       dplyr::mutate(
-        remainder = pmax(power - capacity, 0)
+        remainder = pmax(power - capacity, 0),
+        remainder_after_leave = ifelse(n == 0, remainder_after_leave + remainder, remainder_after_leave),
+        remainder = ifelse(n > 0, remainder, 0)
       )
     
-    df_cps <- df_cps[df_cps$date_time <= "2022-12-31 23:59:59",]
+    df_cps %>%
+      mutate(remainder_after_leave <- ifelse(date_time == date_time[n()], 0, remainder_after_leave))
+    
   }
-  df_cps <- df_cps[,c("run_id", "date_time", "time", "power", "n")]
   
   return (df_cps)
 }
@@ -673,6 +680,7 @@ simulate <- function(
   capacity_fractions_path = NULL,
   season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
+  sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
   # Read files
   season_dist <- readRDS(season_dist_path)
   
@@ -685,19 +693,24 @@ simulate <- function(
   session_sample <- calculate_power(session_sample, kW)
   session_sample <- adjust_overlapping_sessions(session_sample)
   session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
+  
   df_cps <- create_profile(session_sample, n_runs)
-
+  
   if (regular_profile) {
     df_cps$capacity <- kW
   } else {
-    from <- as_datetime(ISOdate(2021, 12, 31, hour=0, min=0, sec=0), "CET")
+    from <- as_datetime(ISOdate(2021, 12, 1, hour=0, min=0, sec=0), "CET")
     to <- as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
     capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by, times=times)
     df_cps <- create_capacities_from_fractions(df_cps, max_capacity, base_capacity, capacity_fractions)
   }
-
+  
   df_cps <- distribute_overcapacity(df_cps)
 
+  # Remove padding
+  df_cps <- df_cps[df_cps$date_time >= "2022-01-01 00:00:00",]
+  df_cps <- df_cps[df_cps$date_time <= "2022-12-31 23:59:59",]
+  
   df_cp <- df_cps %>%
     dplyr::group_by(date_time) %>%
     dplyr::summarise(
@@ -705,5 +718,6 @@ simulate <- function(
       n = sum(n, na.rm = TRUE)
     )
 
+  
   return (list("individual" = df_cps, "aggregated" = df_cp))
 }
