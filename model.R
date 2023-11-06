@@ -346,7 +346,6 @@ flatten_samples <- function(samples) {
     run_id,
     card_id,
     cs_id,
-    # When flattening the sessions we need end_datetime_min15, otherwise we add 1 interval too much
     date_time = seq(start_datetime, end_datetime, by = "15 mins"),
     week,
     energy,
@@ -605,36 +604,18 @@ distribute_overcapacity <- function(df_cps) {
     # Calculate required power
     df_cps <- df_cps %>%
       group_by(run_id) %>%
-      dplyr::mutate(
-        power = pmin(power, capacity)
-      )
-    
-    # Shift remainders by one interval
-    df_cps <- df_cps %>%
-      group_by(run_id) %>%
       arrange(date_time) %>%
       dplyr::mutate(
-        remainder = dplyr::lag(remainder, default = 0)
-      )
-    
-    # Update power rate by adding the shifted remainders
-    df_cps <- df_cps %>%
-      group_by(run_id) %>%
-      dplyr::mutate(
-        power = power + remainder
-      )
-
-    df_cps <- df_cps %>%
-      group_by(run_id) %>%
-      dplyr::mutate(
+        power = pmin(power, capacity),
+        # Shift remainders by one interval
+        remainder = dplyr::lag(remainder, default = 0),
+        # Update power rate by adding the shifted remainders
+        power = power + remainder,
         remainder = pmax(power - capacity, 0),
         remainder_after_leave = ifelse(n == 0, remainder_after_leave + remainder, remainder_after_leave),
-        remainder = ifelse(n > 0, remainder, 0)
+        remainder = ifelse(n > 0, remainder, 0),
+        remainder_after_leave <- ifelse(date_time == date_time[n()], 0, remainder_after_leave)
       )
-    
-    df_cps %>%
-      mutate(remainder_after_leave <- ifelse(date_time == date_time[n()], 0, remainder_after_leave))
-    
   }
   
   return (df_cps)
