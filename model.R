@@ -614,10 +614,11 @@ distribute_overcapacity <- function(df_cps) {
         remainder = pmax(power - capacity, 0),
         remainder_after_leave = ifelse(n == 0, remainder_after_leave + remainder, remainder_after_leave),
         remainder = ifelse(n > 0, remainder, 0),
-        remainder_after_leave <- ifelse(date_time == date_time[n()], 0, remainder_after_leave)
       )
   }
   
+  df_cps <- df_cps %>%
+    mutate(remainder_after_leave = ifelse(date_time == date_time[n()], 0, remainder_after_leave))
   return (df_cps)
 }
 
