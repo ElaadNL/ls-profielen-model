@@ -679,7 +679,7 @@ simulate <- function(
   df_cps <- create_profile(session_sample, n_runs)
   
   if (regular_profile) {
-    df_cps$capacity <- kW
+    df_cps$capacity <- max_capacity
   } else {
     from <- as_datetime(ISOdate(2021, 12, 1, hour=0, min=0, sec=0), "CET")
     to <- as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
