@@ -9,8 +9,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
+library(tidyverse)
 library(plotly)
 ```
+
 
 ## Capacity fractions example
 
@@ -27,6 +29,7 @@ create_capacity_fractions_netbewust_laden(as_datetime("2023-01-01"), as_datetime
   {plot_ly(x=.$date_time, y=.$value)}
 ```
 
+
 ## Model example
 
 ```{r}
@@ -34,7 +37,7 @@ source("model.R")
 ```
 
 ```{r}
-sessions_path = "data/Input/Den Haag/sessions.rds"
+sessions_path = "data/Input/public_combined/sessions.rds"
 sessions <- readRDS(sessions_path)
 sessions_week <- get_sessions_week(sessions, "Charging Station")
 ```
@@ -45,21 +48,59 @@ source("model.R")
 results <- simulate(
   sessions,
   sessions_week,
-  n_runs=30,
+  n_runs=15,
   profile_type = "Charging Station",
-  regular_profile = FALSE,
+  regular_profile = TRUE,
+  charging_location = "public"
 )
+
+results
+```
+
+
+
+## Some analyses of the results
+
+```{r}
+results$individual %>%
+  mutate(month=month(date_time)) %>%
+  group_by(month, run_id) %>%
+  summarise(power_sum=sum(power)) %>%
+  mutate(
+    # As there are 4 intervals in an hour, we need to divide the power by 4 to get to the energy charged in kWh
+    energy_sum=power_sum / 4,
+  ) %>%
+  plot_ly(x=~month, y=~energy_sum, type="box")
+```
+
+```{r}
+results$individual %>%
+  mutate(week_frac=lubridate::wday(date_time, week_start=1) + hour(date_time) / 24) %>%
+  group_by(week_frac) %>%
+  summarise(power=sum(power)) %>%
+  plot_ly(x=~week_frac, y=~power, mode="lines")
+```
+
+```{r}
+results$individual %>%
+  group_by(run_id) %>%
+  mutate(last_n=lag(n), wday=wday(date_time)) %>%
+  filter(last_n > 0, n == 0) %>%
+  plot_ly(x=~time)
+```
+
+```{r}
+results$individual %>%
+  group_by(time) %>%
+  summarise(
+    total_overcapacity=sum(pmax(0, overcapacity)),
+    total_not_charged=sum(not_charged_sum),
+  ) %>%
+  plot_ly(x=~time, y=~total_not_charged)
 ```
 
 ```{r}
 results$individual %>%
   filter(run_id == 1) %>%
   filter(n > 0)
-```
-
-```{r}
-results$individual %>%
-  filter(run_id==2) %>%
-  filter(date_time > "2022-10-01", date_time < "2022-12-01", power > 0) %>%
-  {plot_ly(x=.$date_time, y=.$power, color=.$n)}
 ```
