@@ -117,7 +117,7 @@ sample_annual_mileage <- function(n_runs, year) {
 }
 
 
-### Sample from annual energy demand distribution ###
+### Sample annual energy demands ###
 # Description
 # This function samples the annual energy demand on EV-level or CS-level
 # First the function calls sample_annual_mileage(), whereafter the annual mileage is being multiplied with
@@ -150,8 +150,18 @@ sample_annual_endemand <- function(profile_type, charging_location, n_runs, year
   return (annual_energy_demand)
 }
 
+
+### Sample annual energy demands for CSs ###
+# Description
+# Samples annual energy demand by sampling from monthly energy demands and multiplying by 12.
+#
+# Args
+#   sessions (dataframe): The dataset of sessions
+#   n_runs (integer): Number of runs to sample annual demand for
+#
+# Returns
+#   annual_energy_demand (double[]): vector containing annual energy demand samples 
 sample_annual_endemand_cs <- function(sessions, n_runs) {
-  ### Samples annual energy demand by sampling from monthly energy demands and multiplying by 12
   energy_per_month <- sessions %>%
     arrange(desc(start_datetime)) %>%
     # We only take the most recent whole year
