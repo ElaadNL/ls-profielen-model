@@ -165,7 +165,7 @@ sample_annual_endemand_cs <- function(sessions, n_runs) {
   energy_per_month <- sessions %>%
     arrange(desc(start_datetime)) %>%
     # We only take the most recent whole year
-    filter(start_datetime > start_datetime[1] - years(1)) %>%
+    filter(start_datetime > start_datetime[1] - 3600 * 24 * 365) %>%
     mutate(month=month(start_datetime)) %>%
     group_by(month, cs_id) %>%
     summarise(energy_sum=sum(energy)) %>%
