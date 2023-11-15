@@ -361,8 +361,12 @@ convert_samples <- function(samples, kW) {
     ) %>%
     dplyr::mutate(
       session_id = row_number(),
-      start_datetime = floor_date(start_datetime, "15 mins"),
-      end_datetime = ceiling_date(pmin(end_datetime, start_datetime + 3600*24), "15 mins")
+      start_datetime = round_date(start_datetime, "15 mins"),
+      end_datetime = round_date(end_datetime, "15 mins"),
+      # Limit end times to 24 hours
+      end_datetime = pmin(end_datetime, start_datetime + 3600*24),
+      # Ensure that the sessions spans at least one interval
+      end_datetime = pmax(end_datetime, start_datetime + 60*15),
     )  %>%
     filter(end_datetime > start_datetime)
   
@@ -518,7 +522,7 @@ combine_simultaneous_sessions <- function(samples, profile_type, kW) {
       ) %>%
       dplyr::summarise(
         power = sum(power),
-        n = n()
+        n = pmin(n(), 2)
       )
     
     samples[samples$power > 2 * kW,]$power <- 2 * kW
@@ -715,6 +719,9 @@ simulate <- function(
     capacity_fractions_path = NULL,
     season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
+  # Currently changing the interval size is not supported
+  by = "15 mins"
+  
   # Convert the week into ISO week to ensure week sampling is always done from Monday to Sunday
   sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
   
