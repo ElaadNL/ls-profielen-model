@@ -496,6 +496,7 @@ adjust_overlapping_sessions <- function(samples) {
 #   samples (dataframe): dataframe containing sampled sessions
 #   profile_type (string): profile type (Electrical Vehicle or Charging Station)
 #   kW (double): The maximum power of a connection
+#   n_charging_points (integer): The number of charging points per charging station
 #
 # Returns
 #   samples (dataframe): dataframe containing sampled sessions
