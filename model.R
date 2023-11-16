@@ -104,7 +104,7 @@ sample_annual_mileage <- function(n_runs, year) {
   mileage_density$y <- mileage_density$y[mileage_density$x >= 0]
   mileage_density$x <- mileage_density$x[mileage_density$x >= 0]
   mileage_cdf <- cumsum(mileage_density$y) * diff(mileage_density$x[1:2])
-
+  
   # Sample annual mileages from the CDF, for the number of simulation runs (n_runs)
   uniform_samples <- runif(n_runs, min = min(mileage_cdf), max = max(mileage_cdf))
   mileage_samples <- approxfun(mileage_cdf, mileage_density$x)(uniform_samples)
@@ -165,7 +165,7 @@ sample_annual_endemand_cs <- function(sessions, n_runs) {
   energy_per_month <- sessions %>%
     arrange(desc(start_datetime)) %>%
     # We only take the most recent whole year
-    filter(start_datetime > start_datetime[1] - years(1)) %>%
+    filter(start_datetime > start_datetime[1] - 3600 * 24 * 365) %>%
     mutate(month=month(start_datetime)) %>%
     group_by(month, cs_id) %>%
     summarise(energy_sum=sum(energy)) %>%
@@ -180,7 +180,7 @@ sample_annual_endemand_cs <- function(sessions, n_runs) {
   # We sample for each run a single month from all monthly energy sums
   uniform_samples <- runif(n_runs, min = min(cdf), max = max(cdf))
   samples <- approxfun(cdf, density$x)(uniform_samples)
-    
+  
   # Multiply by 12 to get yearly demand
   return (samples * 12)
 }
@@ -194,6 +194,7 @@ sample_annual_endemand_cs <- function(sessions, n_runs) {
 # After that we normalized the weekly energy demand relative to the annual energy demand.
 #
 # Args
+#   season_dist (dataframe): dataframe containing for each week the Q1 and Q3 values for power demand
 #   annual_energy_demand (double[]): vector containing annual energy demand samples
 #   n_runs (integer): number of simulation runs
 #
@@ -243,6 +244,9 @@ sample_seasonality <- function(season_dist, annual_energy_demand, n_runs) {
 # Args
 #   sessions (dataframe): dataframe containing session data
 #   sessions_week (dataframe): dataframe containing session data aggregated on a weekly level
+#   season_sample (dataframe): dataframe containing for `n` runs and for each week the power demand
+#   profile_type (string): The type of profile to simulate ("Charging Station" or "Electric Vehicle")
+#   n_runs (integer): The number of runs (profiles) to simulate
 #
 # Returns
 #   sample (dataframe): dataframe containing sampled sessions
@@ -357,8 +361,12 @@ convert_samples <- function(samples, kW) {
     ) %>%
     dplyr::mutate(
       session_id = row_number(),
-      start_datetime = floor_date(start_datetime, "15 mins"),
-      end_datetime = ceiling_date(pmin(end_datetime, start_datetime + 3600*24), "15 mins")
+      start_datetime = round_date(start_datetime, "15 mins"),
+      end_datetime = round_date(end_datetime, "15 mins"),
+      # Limit end times to 24 hours
+      end_datetime = pmin(end_datetime, start_datetime + 3600*24),
+      # Ensure that the sessions spans at least one interval
+      end_datetime = pmax(end_datetime, start_datetime + 60*15),
     )  %>%
     filter(end_datetime > start_datetime)
   
@@ -487,10 +495,12 @@ adjust_overlapping_sessions <- function(samples) {
 # Args
 #   samples (dataframe): dataframe containing sampled sessions
 #   profile_type (string): profile type (Electrical Vehicle or Charging Station)
+#   kW (double): The maximum power of a connection
+#   n_charging_points (integer): The number of charging points per charging station
 #
 # Returns
 #   samples (dataframe): dataframe containing sampled sessions
-combine_simultaneous_sessions <- function(samples, profile_type, kW) {
+combine_simultaneous_sessions <- function(samples, profile_type, kW, n_charging_points) {
   if (profile_type == "Electric Vehicle") {
     samples <- samples %>%
       select(
@@ -513,10 +523,10 @@ combine_simultaneous_sessions <- function(samples, profile_type, kW) {
       ) %>%
       dplyr::summarise(
         power = sum(power),
-        n = n()
+        n = pmin(n(), n_charging_points)
       )
     
-    samples[samples$power > 2 * kW,]$power <- 2 * kW
+    samples[samples$power > n_charging_points * kW,]$power <- n_charging_points * kW
   }
   
   return (samples)
@@ -586,12 +596,15 @@ create_profile <- function(samples, n_runs) {
 #   max_capacity (double): The maximum capacity of the charging station
 #   base_capacity (double): The base capacity which is always available to connected vehicles
 #   allowed_capacity_fractions (dataframe): Dataframe containing the allowed capacity fractions per timestamp
+#
+# Returns
+#   df_cps (dataframe): df_cps with for each interval the capacity added
 create_capacities_from_fractions <- function(
-  df_cps,
-  kW,
-  max_capacity,
-  base_capacity,
-  allowed_capacity_fractions
+    df_cps,
+    kW,
+    max_capacity,
+    base_capacity,
+    allowed_capacity_fractions
 ) {
   # Map the capacity fractions to the right date-time index
   df_cps <- df_cps %>%
@@ -669,40 +682,50 @@ distribute_overcapacity <- function(df_cps) {
 # This function is the main function of the model. It contains the simulation pipeline.
 #
 # Args
-#   sessions = individual session data
-#   sessions_week = session data aggregated on weekly level
-#   profile_type = level on which we calculated the charging profile: "Electric Vehicle" or "Charging Station"
-#   charging_location = type of charging location: "public", "work" or "home"
-#   n_runs = number of simulation runs, default 100
-#   year = year for which we calculate the charging profile, default 2023
-#   kW = session power rate, default 11
-#   ev_cs_ratio = EV/CS ratio when calculating the charging profile on CS-level, default 3
-#   regular_profile = whether we calculate a regular charging profile or 'netbewust' charging profile
-#   dashboard = whether the simulation pipeline is being called in dashboard mode or not
+#   sessions (dataframe): individual session data
+#   sessions_week (dataframe): session data aggregated on weekly level
+#   profile_type (string): level on which we calculated the charging profile: "Electric Vehicle" or "Charging Station"
+#   charging_location (string): type of charging location: "public", "work" or "home"
+#   n_runs (integer): number of simulation runs, default 100
+#   year (integer): year for which we calculate the charging profile, default 2023
+#   kW (double): session power rate in kW, default 11
+#   ev_cs_ratio (integer): EV/CS ratio when calculating the charging profile on CS-level, default 3
+#   regular_profile (boolean): whether we calculate a regular charging profile or 'netbewust' charging profile
+#   base_capacity (double): The base capacity of a charging point when Smart Charging
+#   max_capacity (double): The maximum capacity of a charging station as a whole
+#   n_charging_points (integer): The number of charging points per charging station
+#   times (list[list]): The times during which smart charging is enabled. It should be given as a list of lists.
+#   capacity_fractions_path (optional, string): Path to CSV containing for each interval the additional capacity fraction
+#   season_dist_path (string): Path to an RDS containing a dataframe with a seasonality distribution
 #
 # Returns
 #   A list containing the individual charging profiles and aggregated charging profile
 simulate <- function(
-  sessions,
-  sessions_week,
-  profile_type = "Electric Vehicle",
-  charging_location = "public",
-  n_runs = 100,
-  year = 2023,
-  by = "15 mins",
-  # 11kW is the assumed maximum charging rate of an EV using three-phase AC charging
-  kW = 11.0,
-  ev_cs_ratio = 3,
-  regular_profile = TRUE,
-  # 4kW is the base capacity per CP as defined by "Slim laden voor iedereen 2022 - 2025"
-  base_capacity = 4,
-  # P = U * I, and divide by 1000 to get kW
-  # In general it is assumed that CS' are connected by three-phase 25A cables
-  max_capacity = (3 * 25 * 230) / 1000,
-  times=list(list(floor_start=17, floor_end=23, pre_slope=NULL, post_slope=7)),
-  capacity_fractions_path = NULL,
-  season_dist_path = "data/Input/seasonality_distribution.rds"
+    sessions,
+    sessions_week,
+    profile_type = "Electric Vehicle",
+    charging_location = "public",
+    n_runs = 100,
+    year = 2023,
+    by = "15 mins",
+    # 11kW is the assumed maximum charging rate of an EV using three-phase AC charging
+    kW = 11.0,
+    ev_cs_ratio = 3,
+    regular_profile = TRUE,
+    # 4kW is the base capacity per CP as defined by "Slim laden voor iedereen 2022 - 2025"
+    base_capacity = 4,
+    # P = U * I, and divide by 1000 to get kW
+    # In general it is assumed that CS' are connected by three-phase 25A cables
+    max_capacity = (3 * 25 * 230) / 1000,
+    # Number of charging points per charging station (2 by default, should be set to 1 for home charging)
+    n_charging_points = 2,
+    times=list(list(floor_start=17, floor_end=23, pre_slope=NULL, post_slope=7)),
+    capacity_fractions_path = NULL,
+    season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
+  # Currently changing the interval size is not supported
+  by = "15 mins"
+  
   # Convert the week into ISO week to ensure week sampling is always done from Monday to Sunday
   sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
   
@@ -726,7 +749,7 @@ simulate <- function(
   session_sample <- flatten_samples(session_sample)
   session_sample <- calculate_power(session_sample, kW)
   session_sample <- adjust_overlapping_sessions(session_sample)
-  session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
+  session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW, n_charging_points)
   
   df_cps <- create_profile(session_sample, n_runs)
   
@@ -742,7 +765,7 @@ simulate <- function(
   }
   
   df_cps <- distribute_overcapacity(df_cps)
-
+  
   # Remove padding
   df_cps <- df_cps[df_cps$date_time >= "2022-01-01 00:00:00",]
   df_cps <- df_cps[df_cps$date_time <= "2022-12-31 23:59:59",]
