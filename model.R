@@ -499,7 +499,7 @@ adjust_overlapping_sessions <- function(samples) {
 #
 # Returns
 #   samples (dataframe): dataframe containing sampled sessions
-combine_simultaneous_sessions <- function(samples, profile_type, kW) {
+combine_simultaneous_sessions <- function(samples, profile_type, kW, n_charging_points) {
   if (profile_type == "Electric Vehicle") {
     samples <- samples %>%
       select(
@@ -522,10 +522,10 @@ combine_simultaneous_sessions <- function(samples, profile_type, kW) {
       ) %>%
       dplyr::summarise(
         power = sum(power),
-        n = pmin(n(), 2)
+        n = pmin(n(), n_charging_points)
       )
     
-    samples[samples$power > 2 * kW,]$power <- 2 * kW
+    samples[samples$power > n_charging_points * kW,]$power <- n_charging_points * kW
   }
   
   return (samples)
@@ -692,6 +692,7 @@ distribute_overcapacity <- function(df_cps) {
 #   regular_profile (boolean): whether we calculate a regular charging profile or 'netbewust' charging profile
 #   base_capacity (double): The base capacity of a charging point when Smart Charging
 #   max_capacity (double): The maximum capacity of a charging station as a whole
+#   n_charging_points (integer): The number of charging points per charging station
 #   times (list[list]): The times during which smart charging is enabled. It should be given as a list of lists.
 #   capacity_fractions_path (optional, string): Path to CSV containing for each interval the additional capacity fraction
 #   season_dist_path (string): Path to an RDS containing a dataframe with a seasonality distribution
@@ -715,6 +716,8 @@ simulate <- function(
     # P = U * I, and divide by 1000 to get kW
     # In general it is assumed that CS' are connected by three-phase 25A cables
     max_capacity = (3 * 25 * 230) / 1000,
+    # Number of charging points per charging station (2 by default, should be set to 1 for home charging)
+    n_charging_points = 2,
     times=list(list(floor_start=17, floor_end=23, pre_slope=NULL, post_slope=7)),
     capacity_fractions_path = NULL,
     season_dist_path = "data/Input/seasonality_distribution.rds"
@@ -745,7 +748,7 @@ simulate <- function(
   session_sample <- flatten_samples(session_sample)
   session_sample <- calculate_power(session_sample, kW)
   session_sample <- adjust_overlapping_sessions(session_sample)
-  session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW)
+  session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW, n_charging_points)
   
   df_cps <- create_profile(session_sample, n_runs)
   
