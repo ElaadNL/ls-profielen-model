@@ -347,7 +347,7 @@ calculate_intervals <- function(samples, kW) {
 #
 # Returns
 #   samples (dataframe): dataframe containing sampled sessions
-convert_samples <- function(samples, kW) {
+convert_samples <- function(samples, kW, by) {
   samples <- samples %>%
     arrange(week) %>%
     select(
@@ -362,8 +362,8 @@ convert_samples <- function(samples, kW) {
     ) %>%
     dplyr::mutate(
       session_id = row_number(),
-      start_datetime = round_date(start_datetime, "15 mins"),
-      end_datetime = round_date(end_datetime, "15 mins"),
+      start_datetime = round_date(start_datetime, by),
+      end_datetime = round_date(end_datetime, by),
       # Limit end times to 24 hours
       end_datetime = pmin(end_datetime, start_datetime + 3600*24),
       # Ensure that the sessions spans at least one interval
@@ -384,14 +384,14 @@ convert_samples <- function(samples, kW) {
 #
 # Returns
 #   samples (dataframe): dataframe containing sampled sessions
-flatten_samples <- function(samples) {
+flatten_samples <- function(samples, by) {
   # setDT is a flattening function
   samples <- setDT(samples)[, list(
     session_id,
     run_id,
     card_id,
     cs_id,
-    date_time = seq(start_datetime, end_datetime, by = "15 mins"),
+    date_time = seq(start_datetime, end_datetime, by = by),
     week,
     energy,
     n_intervals
@@ -545,13 +545,9 @@ combine_simultaneous_sessions <- function(samples, profile_type, kW, n_charging_
 #
 # Returns
 #   df_cp (dataframe): dataframe containing charging profiles
-create_profile <- function(samples, n_runs) {
-  # Add one week before 1st of January to avoid starting at 0 kW
-  df_cp <- data.table(date_time = seq(
-    as.POSIXct("2021-12-25 00:00:00"),
-    as.POSIXct("2022-12-31 23:59:59"),
-    by = "15 min"
-  ))
+create_profile <- function(samples, n_runs, start_date, end_date, by) {
+  # Create the data frame spanning from the start to end date
+  df_cp <- data.table(date_time = seq(start_date, end_date, by = by))
   
   # Add time related variables
   df_cp <- df_cp %>%
@@ -670,10 +666,6 @@ distribute_overcapacity <- function(df_cps) {
       )
   }
   
-  # Remove remainders from the last interval as it is not necessarily the end of the session
-  df_cps <- df_cps %>%
-    mutate(remainder_after_leave = ifelse(date_time == date_time[n()], 0, remainder_after_leave))
-  
   return (df_cps)
 }
 
@@ -734,6 +726,14 @@ simulate <- function(
   # Read files
   season_dist <- readRDS(season_dist_path)
   
+  # Create start and end dates that span the target year
+  start_date = as.POSIXct(paste0(year, "-01-01 00:00:00"))
+  end_date = as.POSIXct(paste0(year, "-12-31 23:59:59"))
+  # We put exactly one week before and after the start and end dates respectively to add padding.
+  # This ensures that the edges of the data are realistic
+  start_date_with_padding = start_date - 3600 * 24 * 7
+  end_date_with_padding = end_date + 3600 * 24 * 7
+  
   if (profile_type == "Electric Vehicle") {
     # Sample for each run annual energy demand based on historical EV data and predictions
     annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
@@ -747,13 +747,13 @@ simulate <- function(
   
   session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
   session_sample <- calculate_intervals(session_sample, kW)
-  session_sample <- convert_samples(session_sample, kW)
-  session_sample <- flatten_samples(session_sample)
+  session_sample <- convert_samples(session_sample, kW, by)
+  session_sample <- flatten_samples(session_sample, by)
   session_sample <- calculate_power(session_sample, kW)
   session_sample <- adjust_overlapping_sessions(session_sample)
   session_sample <- combine_simultaneous_sessions(session_sample, profile_type, kW, n_charging_points)
   
-  df_cps <- create_profile(session_sample, n_runs)
+  df_cps <- create_profile(session_sample, n_runs, start_date_with_padding, end_date_with_padding, by)
   
   # Set default capacities
   df_cps$capacity <- pmin(df_cps$n*kW, max_capacity)
@@ -765,10 +765,9 @@ simulate <- function(
   
   if (!regular_profile) {
     # Create capacity fractions based on Smart Charging
-    # We add some padding to ensure the edges of the simulated data make sense
-    from <- as_datetime(ISOdate(2021, 12, 1, hour=0, min=0, sec=0), "CET")
-    to <- as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
-    capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by, times=times)
+    capacity_fractions <- create_capacity_fractions_netbewust_laden(
+      start_date_with_padding, end_date_with_padding, by, times=times
+    )
   }
   
   if (!is.null(capacity_fractions)) {
@@ -778,15 +777,16 @@ simulate <- function(
   df_cps <- distribute_overcapacity(df_cps)
   
   # Remove padding
-  df_cps <- df_cps[df_cps$date_time >= "2022-01-01 00:00:00",]
-  df_cps <- df_cps[df_cps$date_time <= "2022-12-31 23:59:59",]
+  df_cps <- df_cps[df_cps$date_time >= start_date,]
+  df_cps <- df_cps[df_cps$date_time <= end_date,]
   
   # Create the aggregated profile which sums for each interval the power of all profiles
   df_cp <- df_cps %>%
     dplyr::group_by(date_time) %>%
     dplyr::summarise(
       power = sum(power, na.rm = TRUE),
-      n = sum(n, na.rm = TRUE)
+      n = sum(n, na.rm = TRUE),
+      capacity = sum(capacity, na.rm = TRUE)
     )
   
   return (list("individual" = df_cps, "aggregated" = df_cp))
