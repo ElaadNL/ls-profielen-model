@@ -722,6 +722,7 @@ simulate <- function(
     n_charging_points = 2,
     times=list(list(floor_start=17, floor_end=23, pre_slope=NULL, post_slope=7)),
     capacity_fractions_path = NULL,
+    capacity_fractions = NULL,
     season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
   # Currently changing the interval size is not supported
@@ -756,8 +757,6 @@ simulate <- function(
   
   # Set default capacities
   df_cps$capacity <- pmin(df_cps$n*kW, max_capacity)
-  
-  capacity_fractions <- NULL
   
   if (!is.null(capacity_fractions_path)) {
     # Capacity fractions are given so load them in
