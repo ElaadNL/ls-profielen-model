@@ -304,6 +304,7 @@ calculate_intervals <- function(samples, kW) {
   # The distribution curve is normalized between 0 and 1, so we have to multiply with the power rate in kW.
   # We also multiply the product with a factor 4 to obtain the number of 15-minute intervals
   max_intervals <- ceiling(max(samples$energy) * (4/(kW * (sum(power_dist$y)/nrow(power_dist)))))
+  max_intervals <- max(max_intervals, 5)
   
   # Initialize conversion table
   conversion <- data.frame(matrix(ncol = 2, nrow = 0))
@@ -320,7 +321,7 @@ calculate_intervals <- function(samples, kW) {
     idx <- match.closest(intervals, power_dist$x)
     energy <- sum(power_dist[idx,]$kW)/4
     
-    conversion[nrow(conversion) + 1,] <- c(n_intervals, energy) 
+    conversion[nrow(conversion) + 1,] <- c(n_intervals, energy)
   }
   
   # Determine number of intervals for each sampled session based on closest match on energy
@@ -753,14 +754,25 @@ simulate <- function(
   
   df_cps <- create_profile(session_sample, n_runs)
   
-  if (regular_profile) {
-    df_cps$capacity <- pmin(df_cps$n*kW, max_capacity)
-  } else {
+  # Set default capacities
+  df_cps$capacity <- pmin(df_cps$n*kW, max_capacity)
+  
+  capacity_fractions <- NULL
+  
+  if (!is.null(capacity_fractions_path)) {
+    # Capacity fractions are given so load them in
+    capacity_fractions <- read.csv(capacity_fractions_path)
+  }
+  
+  if (!regular_profile) {
     # Create capacity fractions based on Smart Charging
     # We add some padding to ensure the edges of the simulated data make sense
     from <- as_datetime(ISOdate(2021, 12, 1, hour=0, min=0, sec=0), "CET")
     to <- as_datetime(ISOdate(2023, 1, 2, hour=0, min=0, sec=0), "CET")
     capacity_fractions <- create_capacity_fractions_netbewust_laden(from, to, by, times=times)
+  }
+  
+  if (!is.null(capacity_fractions)) {
     df_cps <- create_capacities_from_fractions(df_cps, kW, max_capacity, base_capacity, capacity_fractions)
   }
   
