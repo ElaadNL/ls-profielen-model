@@ -666,10 +666,6 @@ distribute_overcapacity <- function(df_cps) {
       )
   }
   
-  # Remove remainders from the last interval as it is not necessarily the end of the session
-  df_cps <- df_cps %>%
-    mutate(remainder_after_leave = ifelse(date_time == date_time[n()], 0, remainder_after_leave))
-  
   return (df_cps)
 }
 
