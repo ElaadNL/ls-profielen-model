@@ -721,12 +721,6 @@ simulate <- function(
   # Currently changing the interval size is not supported
   by = "15 mins"
   
-  # Convert the week into ISO week to ensure week sampling is always done from Monday to Sunday
-  sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
-  
-  # Read files
-  season_dist <- readRDS(season_dist_path)
-  
   # Create start and end dates that span the target year
   start_date = as.POSIXct(paste0(year, "-01-01 00:00:00"))
   end_date = as.POSIXct(paste0(year+1, "-01-01 00:00:00"))
@@ -734,6 +728,44 @@ simulate <- function(
   # This ensures that the edges of the data are realistic
   start_date_with_padding = start_date - 3600 * 24 * 7
   end_date_with_padding = end_date + 3600 * 24 * 7
+  
+  # Convert the week into ISO week to ensure week sampling is always done from Monday to Sunday
+  sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
+  
+  # Read files
+  season_dist <- readRDS(season_dist_path)
+  
+  if (!is.null(capacity_fractions_path)) {
+    # Capacity fractions are given so load them in
+    capacity_fractions <- read.csv(capacity_fractions_path) %>%
+      mutate(date_time = as_datetime(date_time))
+  }
+  
+  if (!is.null(capacity_fractions)) {
+    if (!(start_date %in% capacity_fractions$date_time) | !(end_date %in% capacity_fractions$date_time)) {
+      median_year <- capacity_fractions %>% mutate(year=year(date_time)) %>% {median(.$year)}
+      year_diff <- year - median_year
+      
+      if (year_diff != 0) {
+        print(paste0(
+          "WARNING: Capacity fractions do not span the target year! ",
+          "Adjusting by ", year_diff, " years to match the target year ", year, "!"
+        ))
+        
+        # We shift by exact weeks to make sure that the weekdays stay the same
+        weeks_shift <- round((52 + 1/7) * year_diff)
+        capacity_fractions <- capacity_fractions %>%
+          mutate(date_time=date_time+weeks(weeks_shift))
+      }
+    }
+  }
+  
+  if (!regular_profile) {
+    # Create capacity fractions based on Smart Charging
+    capacity_fractions <- create_capacity_fractions_netbewust_laden(
+      start_date_with_padding, end_date_with_padding, by, times=times
+    )
+  }
   
   if (profile_type == "Electric Vehicle") {
     # Sample for each run annual energy demand based on historical EV data and predictions
@@ -759,24 +791,7 @@ simulate <- function(
   # Set default capacities
   df_cps$capacity <- pmin(df_cps$n*kW, max_capacity)
   
-  if (!is.null(capacity_fractions_path)) {
-    # Capacity fractions are given so load them in
-    capacity_fractions <- read.csv(capacity_fractions_path) %>%
-      mutate(date_time = as_datetime(date_time))
-  }
-  
-  if (!regular_profile) {
-    # Create capacity fractions based on Smart Charging
-    capacity_fractions <- create_capacity_fractions_netbewust_laden(
-      start_date_with_padding, end_date_with_padding, by, times=times
-    )
-  }
-  
   if (!is.null(capacity_fractions)) {
-    if (!(start_date %in% capacity_fractions$date_time) | !(end_date %in% capacity_fractions$date_time)) {
-      print("WARNING: Capacity fractions do not span the target year!")
-    }
-    
     df_cps <- create_capacities_from_fractions(df_cps, kW, max_capacity, base_capacity, capacity_fractions)
   }
   
