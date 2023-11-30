@@ -1,3 +1,4 @@
+library(tidyverse)
 library(dplyr)
 library(lubridate)
 library(rlist)
@@ -98,7 +99,11 @@ create_capacity_fractions_netbewust_laden <- function(
     arrange(date_time) %>%
     select(date_time, value) %>%
     # Cut off the extra days added at the ends
-    filter(date_time >= from & date_time <= to)
+    filter(date_time >= from & date_time <= to) %>%
+    # Filter out double dates
+    group_by(date_time) %>%
+    filter(n() == 1) %>%
+    ungroup()
   
   if (write) write_to_csv(df, path)
   return (df)
