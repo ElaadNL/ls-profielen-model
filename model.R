@@ -610,6 +610,7 @@ create_capacities_from_fractions <- function(
       x=allowed_capacity_fractions$date_time,
       y=allowed_capacity_fractions$value,
       xout=date_time,
+      rule=2
     )$y) %>%
     ungroup() %>%
     mutate(
@@ -728,7 +729,7 @@ simulate <- function(
   
   # Create start and end dates that span the target year
   start_date = as.POSIXct(paste0(year, "-01-01 00:00:00"))
-  end_date = as.POSIXct(paste0(year, "-12-31 23:59:59"))
+  end_date = as.POSIXct(paste0(year+1, "-01-01 00:00:00"))
   # We put exactly one week before and after the start and end dates respectively to add padding.
   # This ensures that the edges of the data are realistic
   start_date_with_padding = start_date - 3600 * 24 * 7
@@ -760,7 +761,8 @@ simulate <- function(
   
   if (!is.null(capacity_fractions_path)) {
     # Capacity fractions are given so load them in
-    capacity_fractions <- read.csv(capacity_fractions_path)
+    capacity_fractions <- read.csv(capacity_fractions_path) %>%
+      mutate(date_time = as_datetime(date_time))
   }
   
   if (!regular_profile) {
@@ -771,6 +773,10 @@ simulate <- function(
   }
   
   if (!is.null(capacity_fractions)) {
+    if (!(start_date %in% capacity_fractions$date_time) | !(end_date %in% capacity_fractions$date_time)) {
+      print("WARNING: Capacity fractions do not span the target year!")
+    }
+    
     df_cps <- create_capacities_from_fractions(df_cps, kW, max_capacity, base_capacity, capacity_fractions)
   }
   
@@ -778,7 +784,7 @@ simulate <- function(
   
   # Remove padding
   df_cps <- df_cps[df_cps$date_time >= start_date,]
-  df_cps <- df_cps[df_cps$date_time <= end_date,]
+  df_cps <- df_cps[df_cps$date_time < end_date,]
   
   # Create the aggregated profile which sums for each interval the power of all profiles
   df_cp <- df_cps %>%
