@@ -5,45 +5,6 @@ library(MALDIquant)
 
 source("capacity_fractions.R")
 
-
-### Retrieve historical sessions ###
-# Description
-# This function retrieves historical sessions from the Postgres DB with the following variables
-#
-# Args
-#   input_data (string): name of input dataset (Den Haag, EVnet, Jedlix, HTC Eindhoven)
-#
-# Returns
-#   sessions (dataframe): dataframe containing the following session data
-#     -card_id
-#     -cs_id
-#     -start_datetime
-#     -end_datetime
-#     -year
-#     -actual_week
-#     -energy
-get_sessions <- function(input_data) {
-  tryCatch({
-    drv <- dbDriver("PostgreSQL")
-    print("Connecting to Database…")
-    connec <- dbConnect(drv,
-                        dbname = Sys.getenv("PG_DBNAME"),
-                        host = Sys.getenv("PG_HOST"),
-                        port = Sys.getenv("PG_PORT"),
-                        user = Sys.getenv("PG_USER"),
-                        password = Sys.getenv("PG_PASSWORD"))
-    print("Database Connected!")
-  },
-  error=function(cond) {
-    print("Unable to connect to Database.")
-  })
-  
-  sessions <- DBI::dbReadTable(connec, c("ls_profielen", paste0("sessions_", input_data)))
-  
-  return (sessions)
-}
-
-
 ### Historical session demand aggregated on weekly level ###
 # Description
 # Depending on whether we simulate sessions for EVs or charging stations (CPs) we aggregate
@@ -56,6 +17,10 @@ get_sessions <- function(input_data) {
 # Returns
 #   sessions_week (dataframe): dataframe containing session data aggregated on a weekly level
 get_sessions_week <- function(sessions, profile_type) {
+  if (!("cs_id" %in% colnames(sessions))) {
+    sessions$cs_id <- sessions$cp_id
+  }
+  
   if (profile_type == "Electric Vehicle") {
     sessions_week <- sessions %>%
       dplyr::group_by(
@@ -718,7 +683,7 @@ simulate <- function(
     capacity_fractions = NULL,
     season_dist_path = "data/Input/seasonality_distribution.rds"
 ) {
-  # Currently changing the interval size is not supported
+  # Currently, changing the interval size is not supported
   by = "15 mins"
   
   # Create start and end dates that span the target year
@@ -731,6 +696,20 @@ simulate <- function(
   
   # Convert the week into ISO week to ensure week sampling is always done from Monday to Sunday
   sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
+  
+  # Check whether sessions have CP or CS
+  if (charging_location %in% c("home", "work")) {
+    if ("cp_id" %in% colnames(sessions)) {
+      # Use `cp_id` as `cs_id`
+      sessions$cs_id <- sessions$cp_id
+    } else {
+      print("WARNING: Need to define `cp_id` when simulating home or work locations! Now using `cs_id`!")
+    }
+  }
+  if (charging_location %in% c("public") & !("cs_id" %in% colnames(sessions))) {
+    print("WARNING: Need to define `cs_id` when simulating home or work locations! Now using `cp_id`!")
+    sessions$cs_id <- sessions$cp_id
+  }
   
   # Read files
   season_dist <- readRDS(season_dist_path)
