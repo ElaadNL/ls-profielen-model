@@ -579,14 +579,17 @@ create_capacities_from_fractions <- function(
     )$y) %>%
     ungroup() %>%
     mutate(
-      # The flex power is equal to the max minus base capacity (per EV)
-      max_flex_capacity=max_capacity - base_capacity * n,
-      # Determine the capacities, equal to the flex power plus the base capacity (per EV)
-      capacity=allowed_capacity_fraction * max_flex_capacity + base_capacity * n,
       # In all cases the capacity of the charging station cannot exceed that of the occupied CPs
-      capacity=pmin(n * kW, capacity, max_capacity)
+      capacity=pmin(
+        # Maximum power power EV
+        n * kW,
+        # Maximum power allowed by capacity fractions
+        n * (base_capacity + allowed_capacity_fraction * (kW - base_capacity)),
+        # Maximum CS capacity
+        max_capacity
+      )
     ) %>%
-    select(-c(allowed_capacity_fraction, max_flex_capacity))
+    select(-c(allowed_capacity_fraction))
   
   return (df_cps)
 }
@@ -721,8 +724,16 @@ simulate <- function(
   }
   
   if (!is.null(capacity_fractions)) {
+    # We may need to adjust the capacity fractions' year to match the selected year.
+    # This is not an optimal solution, but it should be up to the user to supply data for the correct year
     if (!(start_date %in% capacity_fractions$date_time) | !(end_date %in% capacity_fractions$date_time)) {
-      median_year <- capacity_fractions %>% mutate(year=year(date_time)) %>% {median(.$year)}
+      median_year <- capacity_fractions %>%
+        mutate(year=lubridate::year(date_time)) %>%
+        group_by(year) %>%
+        count() %>%
+        arrange(desc(n)) %>%
+        {.$year[1]}
+      
       year_diff <- year - median_year
       
       if (year_diff != 0) {
@@ -739,7 +750,7 @@ simulate <- function(
     }
   }
   
-  if (!regular_profile) {
+  if (!regular_profile & is.null(capacity_fractions)) {
     # Create capacity fractions based on Smart Charging
     capacity_fractions <- create_capacity_fractions_netbewust_laden(
       start_date_with_padding, end_date_with_padding, by, times=times
