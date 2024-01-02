@@ -230,17 +230,10 @@ sample_sessions <- function(sessions, sessions_week, season_sample, profile_type
   
   # Join the weekly samples with the individual session data
   if (profile_type == "Electric Vehicle") {
-    sample <- merge(sample, sessions, by = c("year", "actual_week", "card_id"))
+    sample <- base::merge(sample, sessions, by = c("year", "actual_week", "card_id"))
   } else {
-    sample <- merge(sample, sessions, by = c("year", "actual_week", "cs_id"))
+    sample <- base::merge(sample, sessions, by = c("year", "actual_week", "cs_id"))
   }
-  
-  # Test annual energy demand per run
-  sample_sum <- sample %>%
-    group_by(run_id) %>%
-    dplyr::summarise(
-      energy = sum(energy, na.rm = TRUE)
-    )
   
   return (sample)
 }
@@ -367,12 +360,16 @@ flatten_samples <- function(samples, by) {
       wday = as.integer(lubridate::wday(date_time, week_start = 1)),
       time = format(date_time, format = "%H:%M")
     ) %>%
-    # When the flattened session goes outside the week they are given they get chopped off.
-    # This can by adding to the week the difference between the smallest week for a session and the
-    # current week for each interval. It is assumed session are shorter than a week.
+    # As all intervals resulting from flattening have the week from the start datetime assigned to
+    # them, when the end datetime of the original session falls in the next actual week, we need to
+    # adjust the week number of intervals that fall in the next week.
     group_by(session_id) %>%
-    arrange(session_id, date_time) %>%
-    mutate(week=ifelse(wday < wday[1], week + 1, week)) %>%
+    arrange(date_time) %>%
+    mutate(
+      actual_week = lubridate::week(date_time),
+      week_modifier = actual_week - min(actual_week),
+      week = week + week_modifier
+    ) %>%
     ungroup() %>%
     select(
       session_id,
@@ -650,6 +647,7 @@ distribute_overcapacity <- function(df_cps) {
 #   charging_location (string): type of charging location: "public", "work" or "home"
 #   n_runs (integer): number of simulation runs, default 100
 #   year (integer): year for which we calculate the charging profile, default 2023
+#   by (string): interval size of the simulated year
 #   kW (double): session power rate in kW, default 11
 #   ev_cs_ratio (integer): EV/CS ratio when calculating the charging profile on CS-level, default 3
 #   regular_profile (boolean): whether we calculate a regular charging profile or 'netbewust' charging profile
@@ -658,7 +656,9 @@ distribute_overcapacity <- function(df_cps) {
 #   n_charging_points (integer): The number of charging points per charging station
 #   times (list[list]): The times during which smart charging is enabled. It should be given as a list of lists.
 #   capacity_fractions_path (optional, string): Path to CSV containing for each interval the additional capacity fraction
+#   capacity_fractions (dataframe): DataFrame (date_time, value) containing capacity fractions for each interval in a year
 #   season_dist_path (string): Path to an RDS containing a dataframe with a seasonality distribution
+#   seed (integer): Random seed to use during the simulation
 #
 # Returns
 #   A list containing the individual charging profiles and aggregated charging profile
@@ -684,10 +684,16 @@ simulate <- function(
     times=list(list(floor_start=17, floor_end=23, pre_slope=NULL, post_slope=7)),
     capacity_fractions_path = NULL,
     capacity_fractions = NULL,
-    season_dist_path = "data/Input/seasonality_distribution.rds"
+    season_dist_path = "data/Input/seasonality_distribution.rds",
+    seed = NULL
 ) {
   # Currently, changing the interval size is not supported
   by = "15 mins"
+  
+  if (!is.null(seed)) {
+    # Set the random seed
+    set.seed(seed)
+  }
   
   # Create start and end dates that span the target year
   start_date = as.POSIXct(paste0(year, "-01-01 00:00:00"))
@@ -696,9 +702,6 @@ simulate <- function(
   # This ensures that the edges of the data are realistic
   start_date_with_padding = start_date - 3600 * 24 * 7
   end_date_with_padding = end_date + 3600 * 24 * 7
-  
-  # Convert the week into ISO week to ensure week sampling is always done from Monday to Sunday
-  sessions <- sessions %>% mutate(actual_week=isoweek(start_datetime))
   
   # Check whether sessions have CP or CS
   if (charging_location %in% c("home", "work")) {
@@ -767,7 +770,7 @@ simulate <- function(
   
   # Convert annual energy demand into weekly energy demand and apply a seasonality distribution
   season_sample <- sample_seasonality(season_dist, annual_energy_demand, n_runs)
-  
+
   session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
   session_sample <- calculate_intervals(session_sample, kW)
   session_sample <- convert_samples(session_sample, kW, by)
