@@ -360,12 +360,16 @@ flatten_samples <- function(samples, by) {
       wday = as.integer(lubridate::wday(date_time, week_start = 1)),
       time = format(date_time, format = "%H:%M")
     ) %>%
-    # When the flattened session goes outside the week they are given they get chopped off.
-    # This can by adding to the week the difference between the smallest week for a session and the
-    # current week for each interval. It is assumed session are shorter than a week.
+    # As all intervals resulting from flattening have the week from the start datetime assigned to
+    # them, when the end datetime of the original session falls in the next actual week, we need to
+    # adjust the week number of intervals that fall in the next week.
     group_by(session_id) %>%
-    arrange(session_id, date_time) %>%
-    mutate(week=ifelse(wday < wday[1], week + 1, week)) %>%
+    arrange(date_time) %>%
+    mutate(
+      actual_week = lubridate::week(date_time),
+      week_modifier = actual_week - min(actual_week),
+      week = week + week_modifier
+    ) %>%
     ungroup() %>%
     select(
       session_id,
