@@ -189,13 +189,6 @@ sample_seasonality <- function(season_dist, annual_energy_demand, n_runs) {
   # Calculate weekly energy demand based on annual energy demand and sampled weekly coefficient
   sample$energy_week <- sample$season_sample * sample$annual_energy_demand
   
-  # Test annual energy demand per simulation run
-  sample_sum <- sample %>%
-    group_by(run_id) %>%
-    dplyr::summarise(
-      energy = sum(energy_week, na.rm = TRUE)
-    )
-  
   return (sample)
 }
 
@@ -227,7 +220,7 @@ sample_sessions <- function(sessions, sessions_week, season_sample, profile_type
   # Assign week numbers and simulation run IDs
   sample$week <- rep(1:53, times = n_runs)
   sample$run_id <- rep(1:n_runs, each = 53)
-  
+    
   # Join the weekly samples with the individual session data
   if (profile_type == "Electric Vehicle") {
     sample <- base::merge(sample, sessions, by = c("year", "actual_week", "card_id"))
@@ -235,9 +228,58 @@ sample_sessions <- function(sessions, sessions_week, season_sample, profile_type
     sample <- base::merge(sample, sessions, by = c("year", "actual_week", "cs_id"))
   }
   
+  sample <- sample %>%
+    mutate(wday = lubridate::wday(start_datetime, week_start = 1))
+  
   return (sample)
 }
 
+correct_holiday_sessions_cp <- function(sessions, sample, n_runs, year, holidays) {
+  # Take a sample of cs_id's 
+  cs_id_sample <- sessions %>%
+    mutate(date = as.Date(start_datetime)) %>%
+    group_by(cs_id) %>%
+    filter(
+      # Only take the most recent year of a CS
+      date > max(date) - 3600 * 24 * 365
+      # Enforce that we need to have at least one session in the same month last year;
+      # We then have a complete year of sessions to choose from
+      & any(year(date) == year(max(date) - 1) & month(date) == month(max(date)))
+    ) %>%
+    ungroup() %>%
+    select(cs_id) %>%
+    unique() %>%
+    slice_sample(n=n_runs) %>%
+    mutate(run_id = row_number()) %>%
+    expand_grid(holiday=unique(holidays$holiday))
+  
+  # Get the holidays for the target year.
+  # We need this to put the holidays on the right day of the right week
+  holidays_year <- holidays %>%
+    filter(year(date) == year) %>%
+    select(holiday, week, wday)
+  
+  # Get the holiday sessions based on the cs_id sample
+  holiday_sessions <- sessions %>%
+    mutate(date = as.Date(start_datetime)) %>%
+    merge(holidays, by="date") %>%
+    merge(cs_id_sample, by=c("cs_id", "holiday")) %>%
+    arrange(run_id, cs_id) %>%
+    select(run_id, cs_id, card_id, start_datetime, end_datetime, date, holiday, energy) %>%
+    merge(holidays_year, by="holiday")
+  
+  # Replace the sessions in the sample
+  sample_holidays_fixed <- sample %>%
+    select(run_id, cs_id, card_id, start_datetime, end_datetime, week, wday, energy) %>%
+    # We merge the holidays on the week assigned during sampling and the week day of the session
+    merge(holidays, by=c("week", "wday"), all.x = T) %>%
+    # We need to remove all old sessions on the holidays
+    filter(is.na(holiday)) %>%
+    # Now append the holiday sessions
+    rbind(holiday_sessions)
+  
+  return(sample_holidays_fixed)
+}
 
 
 ### Calculate intervals per session ###
@@ -316,6 +358,7 @@ convert_samples <- function(samples, kW, by) {
       end_datetime,
       energy,
       week,
+      wday,
       n_intervals
     ) %>%
     dplyr::mutate(
@@ -351,24 +394,25 @@ flatten_samples <- function(samples, by) {
     cs_id,
     date_time = seq(start_datetime, end_datetime, by = by),
     week,
+    wday,
     energy,
     n_intervals
   ), by = 1:nrow(samples)]
   
   samples <- samples %>%
-    mutate(
-      wday = as.integer(lubridate::wday(date_time, week_start = 1)),
-      time = format(date_time, format = "%H:%M")
-    ) %>%
-    # As all intervals resulting from flattening have the week from the start datetime assigned to
-    # them, when the end datetime of the original session falls in the next actual week, we need to
-    # adjust the week number of intervals that fall in the next week.
+    mutate(time = format(date_time, format = "%H:%M")) %>%
+    # The week and wday don't change when flattening the sessions so we need to adjust for that
     group_by(session_id) %>%
     arrange(date_time) %>%
     mutate(
       actual_week = lubridate::week(date_time),
+      actual_wday = lubridate::wday(date_time, week_start = 1),
       week_modifier = actual_week - min(actual_week),
-      week = week + week_modifier
+      wday_modifier = actual_wday - min(actual_wday),
+      week = (week + week_modifier) %% 53,
+      week = ifelse(week == 0, 53, week),
+      wday = (wday + wday_modifier) %% 7,
+      wday = ifelse(wday == 0, 7, wday)
     ) %>%
     ungroup() %>%
     select(
@@ -514,7 +558,7 @@ create_profile <- function(samples, n_runs, start_date, end_date, by) {
   # Add time related variables
   df_cp <- df_cp %>%
     mutate(
-      week = isoweek(date_time),
+      week = lubridate::week(date_time),
       wday = lubridate::wday(date_time, week_start=1),
       time = format(date_time, format = "%H:%M"),
     )
@@ -530,7 +574,7 @@ create_profile <- function(samples, n_runs, start_date, end_date, by) {
   
   df_cp[is.na(df_cp)] <- 0
   
-  # # Sort charging profiles by date_time
+  # Sort charging profiles by date_time
   df_cp <- df_cp %>%
     arrange(run_id, date_time) %>%
     select(
@@ -685,6 +729,8 @@ simulate <- function(
     capacity_fractions_path = NULL,
     capacity_fractions = NULL,
     season_dist_path = "data/Input/seasonality_distribution.rds",
+    # A file file containing a table with the holidays that should be considered (2020-2050)
+    holidays_path = "data/Input/holidays.csv",
     seed = NULL
 ) {
   # Currently, changing the interval size is not supported
@@ -717,14 +763,27 @@ simulate <- function(
     sessions$cs_id <- sessions$cp_id
   }
   
-  # Read files
+  ### Read files
+  
   season_dist <- readRDS(season_dist_path)
+  
+  holidays <- NULL
+  if (!is.null(holidays_path)) {
+    holidays <- read.csv(holidays_path) %>%
+      mutate(
+        date = as.Date(date),
+        week = lubridate::week(date),
+        wday = lubridate::wday(date, week_start = 1)
+      )
+  }
   
   if (!is.null(capacity_fractions_path)) {
     # Capacity fractions are given so load them in
     capacity_fractions <- read.csv(capacity_fractions_path) %>%
       mutate(date_time = as_datetime(date_time))
   }
+  
+  ###
   
   if (!is.null(capacity_fractions)) {
     # We may need to adjust the capacity fractions' year to match the selected year.
@@ -770,8 +829,12 @@ simulate <- function(
   
   # Convert annual energy demand into weekly energy demand and apply a seasonality distribution
   season_sample <- sample_seasonality(season_dist, annual_energy_demand, n_runs)
-
   session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
+  
+  if (!is.null(holidays)) {
+    session_sample <- correct_holiday_sessions_cp(sessions, session_sample, n_runs, year, holidays)
+  }
+  
   session_sample <- calculate_intervals(session_sample, kW)
   session_sample <- convert_samples(session_sample, kW, by)
   session_sample <- flatten_samples(session_sample, by)
