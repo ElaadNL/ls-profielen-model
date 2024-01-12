@@ -234,22 +234,45 @@ sample_sessions <- function(sessions, sessions_week, season_sample, profile_type
   return (sample)
 }
 
-correct_holiday_sessions_cp <- function(sessions, sample, n_runs, year, holidays) {
-  # Take a sample of cs_id's 
-  cs_id_sample <- sessions %>%
-    mutate(date = as.Date(start_datetime)) %>%
-    group_by(cs_id) %>%
-    filter(
-      # Only take the most recent year of a CS
-      date > max(date) - 3600 * 24 * 365
-      # Enforce that we need to have at least one session in the same month last year;
-      # We then have a complete year of sessions to choose from
-      & any(year(date) == year(max(date) - 1) & month(date) == month(max(date)))
+correct_holiday_sessions <- function(
+  sessions, sample, n_runs, year, holidays, profile_type, annual_energy_demands
+) {
+  id_name <- ifelse(profile_type == "Electric Vehicle", "card_id", "cs_id")
+  
+  ids <- sessions %>%
+    mutate(
+      date = as.Date(start_datetime),
+      year = year(start_datetime)
     ) %>%
+    group_by_at(c(id_name, "year")) %>%
+    filter(
+      # Enforce that we need to have at least one session in January and December
+      any(month(date) == 1),
+      any(month(date) == 12)
+    ) %>%
+    summarise(energy = sum(energy)) %>%
     ungroup() %>%
-    select(cs_id) %>%
-    unique() %>%
-    slice_sample(n=n_runs) %>%
+    select(!!id_name, energy, year) %>%
+    arrange(energy)
+  
+  id_sample <- NULL
+  
+  # Take a sample of id's based on the closest match in energy
+  for (i in 1:n_runs) {
+    annual_energy_demand <- annual_energy_demands[i]
+    idx <- which.min(abs(ids$energy - annual_energy_demand))
+    row <- ids[idx,]
+    ids <- ids[-idx,]
+    
+    if (is.null(id_sample)) {
+      id_sample <- row
+    } else {
+      id_sample <- rbind(id_sample, row)
+    }
+  }
+  
+  id_sample <- id_sample %>%
+    select(!!id_name, year) %>%
     mutate(run_id = row_number()) %>%
     expand_grid(holiday=unique(holidays$holiday))
   
@@ -259,20 +282,25 @@ correct_holiday_sessions_cp <- function(sessions, sample, n_runs, year, holidays
     filter(year(date) == year) %>%
     select(holiday, week, wday)
   
-  # Get the holiday sessions based on the cs_id sample
+  # Get the holiday sessions based on the id sample
   holiday_sessions <- sessions %>%
-    mutate(date = as.Date(start_datetime)) %>%
+    mutate(
+      date = as.Date(start_datetime),
+      year = year(start_datetime)
+    ) %>%
     merge(holidays, by="date") %>%
-    merge(cs_id_sample, by=c("cs_id", "holiday")) %>%
-    arrange(run_id, cs_id) %>%
-    select(run_id, cs_id, card_id, start_datetime, end_datetime, date, holiday, energy) %>%
+    merge(id_sample, by=c(id_name, "year", "holiday"))
+  
+  holiday_sessions <- holiday_sessions %>%
+    select(run_id, cs_id, card_id, start_datetime, end_datetime, holiday, energy) %>%
+    # Merge with the holidays of the target year to get the correct week and wday
     merge(holidays_year, by="holiday")
   
   # Replace the sessions in the sample
   sample_holidays_fixed <- sample %>%
     select(run_id, cs_id, card_id, start_datetime, end_datetime, week, wday, energy) %>%
     # We merge the holidays on the week assigned during sampling and the week day of the session
-    merge(holidays, by=c("week", "wday"), all.x = T) %>%
+    merge(holidays_year, by=c("week", "wday"), all.x = T) %>%
     # We need to remove all old sessions on the holidays
     filter(is.na(holiday)) %>%
     # Now append the holiday sessions
@@ -347,9 +375,9 @@ calculate_intervals <- function(samples, kW) {
 #
 # Returns
 #   samples (dataframe): dataframe containing sampled sessions
-convert_samples <- function(samples, kW, by) {
+convert_samples <- function(samples, kW, year, by) {
+  first_day_of_the_year <- as.Date(paste0(year, "-1-1"))
   samples <- samples %>%
-    arrange(week) %>%
     select(
       run_id,
       card_id,
@@ -361,15 +389,25 @@ convert_samples <- function(samples, kW, by) {
       wday,
       n_intervals
     ) %>%
-    dplyr::mutate(
+    mutate(
       session_id = row_number(),
+      # Map the start and end datetimes to the target year
       start_datetime = round_date(start_datetime, by),
       end_datetime = round_date(end_datetime, by),
-      # Limit end times to 24 hours
-      end_datetime = pmin(end_datetime, start_datetime + 3600*24),
-      # Ensure that the sessions spans at least one interval
-      end_datetime = pmax(end_datetime, start_datetime + 60*15),
-    )  %>%
+      length = difftime(end_datetime, start_datetime),
+      time = strftime(start_datetime, format="%H:%M:%S"),
+      start_date = !!first_day_of_the_year + (week - 1) * 7 - wday(!!first_day_of_the_year, week_start = 1) + wday,
+      start_datetime = as_datetime(
+        paste0(strftime(start_date, format="%Y-%m-%d"), " ", time),
+        format="%Y-%m-%d %H:%M:%S",
+        tz="CET"
+      )
+    ) %>%
+    filter(!is.na(start_datetime)) %>%
+    mutate(
+      # start_datetime = as_datetime(start_datetime, tz="CET"),
+      end_datetime = start_datetime + length
+    ) %>%
     filter(end_datetime > start_datetime)
   
   return (samples)
@@ -400,29 +438,13 @@ flatten_samples <- function(samples, by) {
   ), by = 1:nrow(samples)]
   
   samples <- samples %>%
-    mutate(time = format(date_time, format = "%H:%M")) %>%
-    # The week and wday don't change when flattening the sessions so we need to adjust for that
-    group_by(session_id) %>%
-    arrange(date_time) %>%
-    mutate(
-      actual_week = lubridate::week(date_time),
-      actual_wday = lubridate::wday(date_time, week_start = 1),
-      week_modifier = actual_week - min(actual_week),
-      wday_modifier = actual_wday - min(actual_wday),
-      week = (week + week_modifier) %% 53,
-      week = ifelse(week == 0, 53, week),
-      wday = (wday + wday_modifier) %% 7,
-      wday = ifelse(wday == 0, 7, wday)
-    ) %>%
-    ungroup() %>%
+    arrange(run_id, session_id, date_time) %>%
     select(
       session_id,
+      date_time,
       run_id,
       card_id,
       cs_id,
-      week,
-      wday,
-      time,
       energy,
       n_intervals
     )
@@ -483,9 +505,7 @@ adjust_overlapping_sessions <- function(samples) {
       run_id,
       card_id,
       cs_id,
-      week,
-      wday,
-      time
+      date_time
     ) %>%
     dplyr::summarise(
       power = max(power)
@@ -513,9 +533,7 @@ combine_simultaneous_sessions <- function(samples, profile_type, kW, n_charging_
       select(
         run_id,
         card_id,
-        week,
-        wday,
-        time,
+        date_time,
         power
       ) %>% mutate(
         n = 1
@@ -524,9 +542,7 @@ combine_simultaneous_sessions <- function(samples, profile_type, kW, n_charging_
     samples <- samples %>%
       group_by(
         run_id,
-        week,
-        wday,
-        time
+        date_time
       ) %>%
       dplyr::summarise(
         power = sum(power),
@@ -554,14 +570,6 @@ combine_simultaneous_sessions <- function(samples, profile_type, kW, n_charging_
 create_profile <- function(samples, n_runs, start_date, end_date, by) {
   # Create the data frame spanning from the start to end date
   df_cp <- data.table(date_time = seq(start_date, end_date, by = by))
-  
-  # Add time related variables
-  df_cp <- df_cp %>%
-    mutate(
-      week = lubridate::week(date_time),
-      wday = lubridate::wday(date_time, week_start=1),
-      time = format(date_time, format = "%H:%M"),
-    )
   nrows_df_cp <- nrow(df_cp)
   
   # Replicate charging profile dataframe n_runs times
@@ -570,7 +578,7 @@ create_profile <- function(samples, n_runs, start_date, end_date, by) {
   df_cp$run_id <- rep(1:n_runs, each = nrows_df_cp)
   
   # Join charging profiles with sampled data
-  df_cp <- merge(df_cp, samples, all.x = TRUE, by = c("run_id", "week", "wday", "time"))
+  df_cp <- merge(df_cp, samples, all.x = TRUE, by = c("run_id", "date_time"))
   
   df_cp[is.na(df_cp)] <- 0
   
@@ -580,7 +588,6 @@ create_profile <- function(samples, n_runs, start_date, end_date, by) {
     select(
       run_id,
       date_time,
-      time,
       power,
       n
     )
@@ -832,11 +839,13 @@ simulate <- function(
   session_sample <- sample_sessions(sessions, sessions_week, season_sample, profile_type, n_runs)
   
   if (!is.null(holidays)) {
-    session_sample <- correct_holiday_sessions_cp(sessions, session_sample, n_runs, year, holidays)
+    session_sample <- correct_holiday_sessions(
+      sessions, session_sample, n_runs, year, holidays, profile_type, annual_energy_demand
+    )
   }
   
   session_sample <- calculate_intervals(session_sample, kW)
-  session_sample <- convert_samples(session_sample, kW, by)
+  session_sample <- convert_samples(session_sample, kW, year, by)
   session_sample <- flatten_samples(session_sample, by)
   session_sample <- calculate_power(session_sample, kW)
   session_sample <- adjust_overlapping_sessions(session_sample)
