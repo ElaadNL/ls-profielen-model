@@ -151,6 +151,30 @@ sample_annual_endemand_cs <- function(sessions, n_runs) {
 }
 
 
+### Sample annual energy demands for CSs ###
+# Description
+# Samples annual energy demand by sampling from a normal distribution.
+#
+# Args
+#   n_runs (integer): Number of runs to sample annual demand for
+#   mean (integer): Mean 
+#
+# Returns
+#   annual_energy_demand (double[]): vector containing annual energy demand samples 
+sample_annual_endemand_dist <- function(n_runs, mean, sd = NULL) {
+  if (is.null(sd)) {
+    # If no SD is given we use mean/20 as a to get a little variance in the samples
+    sd <- mean / 20
+  }
+  
+  energy_samples <- rnorm(n_runs, mean = mean, sd = sd)
+  # There is a chance we sample a negative value which we need to reset to 0
+  energy_samples[energy_samples < 0] <- energy_samples
+  
+  return (energy_samples)
+}
+
+
 ### Sample from seasonality distribution ###
 # Description
 # This function samples from a seasonality distribution table, which is based on the following datasets:
@@ -397,7 +421,7 @@ calculate_intervals <- function(samples, kW) {
 #   samples (dataframe): dataframe containing sampled sessions
 convert_samples <- function(samples, kW, year, by) {
   first_day_of_the_year <- as.Date(paste0(year, "-1-1"))
-  first_week_day_of_the_year <- wday(first_day_of_the_year, week_start = 1)
+  first_week_day_of_the_year <- lubridate::wday(first_day_of_the_year, week_start = 1)
   
   samples <- samples %>%
     mutate(
@@ -727,6 +751,8 @@ distribute_overcapacity <- function(df_cps) {
 #   n_runs (integer): number of simulation runs, default 100
 #   year (integer): year for which we calculate the charging profile, default 2023
 #   by (string): interval size of the simulated year
+#   demand_mean (integer): Optionally, defines the mean yearly demand of the profile
+#   demand_sd (integer): Optionally, defines the standard deviation of the yearly demand (when a mean is specified)
 #   kW (double): session power rate in kW, default 11
 #   ev_cs_ratio (integer): EV/CS ratio when calculating the charging profile on CS-level, default 3
 #   regular_profile (boolean): whether we calculate a regular charging profile or 'netbewust' charging profile
@@ -749,6 +775,8 @@ simulate <- function(
     n_runs = 100,
     year = 2023,
     by = "15 mins",
+    demand_mean = NULL,
+    demand_sd = NULL,
     # 11kW is the assumed maximum charging rate of an EV using three-phase AC charging
     kW = 11.0,
     ev_cs_ratio = 3,
@@ -854,12 +882,17 @@ simulate <- function(
     )
   }
   
-  if (profile_type == "Electric Vehicle") {
-    # Sample for each run annual energy demand based on historical EV data and predictions
-    annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
-  } else {
-    # Sample for each run annual energy demand based on the CS monthly energy distribution in the session data
-    annual_energy_demand <- sample_annual_endemand_cs(sessions, n_runs)
+  if (!is.null(demand_mean)) {
+    # Sample a demand using a distribution
+    annual_energy_demand <- sample_annual_endemand_dist(n_runs, demand_mean, demand_sd)
+  } else{
+    if (profile_type == "Electric Vehicle") {
+      # Sample for each run annual energy demand based on historical EV data and predictions
+      annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
+    } else {
+      # Sample for each run annual energy demand based on the CS monthly energy distribution in the session data
+      annual_energy_demand <- sample_annual_endemand_cs(sessions, n_runs)
+    }
   }
   
   # Convert annual energy demand into weekly energy demand and apply a seasonality distribution
