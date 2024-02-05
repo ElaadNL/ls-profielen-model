@@ -163,13 +163,13 @@ sample_annual_endemand_cs <- function(sessions, n_runs) {
 #   annual_energy_demand (double[]): vector containing annual energy demand samples 
 sample_annual_endemand_dist <- function(n_runs, mean, sd = NULL) {
   if (is.null(sd)) {
-    # If no SD is given we use mean/20 as a to get a little variance in the samples
+    # If no SD is given we use mean/20 as a simple replacement to get variance in the samples
     sd <- mean / 20
   }
   
   energy_samples <- rnorm(n_runs, mean = mean, sd = sd)
   # There is a chance we sample a negative value which we need to reset to 0
-  energy_samples[energy_samples < 0] <- energy_samples
+  energy_samples[energy_samples < 0] <- 0
   
   return (energy_samples)
 }
@@ -482,7 +482,8 @@ flatten_samples <- function(samples, by) {
     run_id,
     card_id,
     cs_id,
-    date_time = seq(start_datetime, end_datetime, by = by),
+    # We subtract 1 from the end_datetime as with rounded date times we get 1 interval too many
+    date_time = seq(start_datetime, end_datetime - 1, by = by),
     week,
     wday,
     energy,
@@ -632,6 +633,7 @@ create_profile <- function(samples, n_runs, start_date, end_date, by) {
   # Join charging profiles with sampled data
   df_cp <- merge(df_cp, samples, all.x = TRUE, by = c("run_id", "date_time"))
   
+  # Set the power of all intervals not in the sampled sessions to 0
   df_cp[is.na(df_cp)] <- 0
   
   # Sort charging profiles by date_time
@@ -643,6 +645,8 @@ create_profile <- function(samples, n_runs, start_date, end_date, by) {
       power,
       n
     )
+  
+  return (df_cp)
 }
 
 
