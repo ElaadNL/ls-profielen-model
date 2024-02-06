@@ -90,27 +90,20 @@ sample_annual_mileage <- function(n_runs, year) {
 # When the annual demand is being calculated on CP level we also multiply with the EV/CS-ratio
 #
 # Args
-#   profile_type (string): profile type (Electrical Vehicle or Charging Station)
 #   charging_location (string): charging location type (public, home, work)
 #   n_runs (integer): number of simulation runs
 #   year (integer): year
-#   ev_cs_ratio (integer): EV/CS ratio (default 3)
 #
 # Returns
 #   annual_energy_demand (double[]): vector containing annual energy demand samples 
-sample_annual_endemand <- function(profile_type, charging_location, n_runs, year, ev_cs_ratio = 3) {
-  # General mobility assumptions
+sample_annual_endemand <- function(charging_location, n_runs, year) {
   annual_mileage <- sample_annual_mileage(n_runs, year)
-  energy_efficiency <- 0.2
   
+  # General mobility assumptions
+  energy_efficiency <- 0.2
   location_mix = c("home" = .19, "public" = .55, "work" = .17, "fast" = .9)
   
-  # Multiply annual mileage with the location mix, energy efficiency and EV/CS-ratio (on CS_level)
-  if (profile_type == "Electric Vehicle") {
-    annual_energy_demand <- annual_mileage * location_mix[charging_location] * energy_efficiency
-  } else {
-    annual_energy_demand <- annual_mileage * location_mix[charging_location] * energy_efficiency * ev_cs_ratio
-  }
+  annual_energy_demand <- annual_mileage * location_mix[charging_location] * energy_efficiency
   
   return (annual_energy_demand)
 }
@@ -128,6 +121,7 @@ sample_annual_endemand <- function(profile_type, charging_location, n_runs, year
 #   annual_energy_demand (double[]): vector containing annual energy demand samples 
 sample_annual_endemand_cs <- function(sessions, n_runs) {
   energy_per_month <- sessions %>%
+    group_by(cs_id) %>%
     arrange(desc(start_datetime)) %>%
     # We only take the most recent whole year
     filter(start_datetime > start_datetime[1] - 3600 * 24 * 365) %>%
@@ -289,6 +283,7 @@ correct_holiday_sessions <- function(
     group_by_at(c(id_name, "year")) %>%
     filter(
       # Enforce that we need to have at least one session in January and December
+      # We want to sample from a cs/card that spans the whole year so we are not missing holidays
       any(month(date) == 1),
       any(month(date) == 12)
     ) %>%
@@ -758,7 +753,6 @@ distribute_overcapacity <- function(df_cps) {
 #   demand_mean (integer): Optionally, defines the mean yearly demand of the profile
 #   demand_sd (integer): Optionally, defines the standard deviation of the yearly demand (when a mean is specified)
 #   kW (double): session power rate in kW, default 11
-#   ev_cs_ratio (integer): EV/CS ratio when calculating the charging profile on CS-level, default 3
 #   regular_profile (boolean): whether we calculate a regular charging profile or 'netbewust' charging profile
 #   base_capacity (double): The base capacity of a charging point when Smart Charging
 #   max_capacity (double): The maximum capacity of a charging station as a whole
@@ -783,7 +777,6 @@ simulate <- function(
     demand_sd = NULL,
     # 11kW is the assumed maximum charging rate of an EV using three-phase AC charging
     kW = 11.0,
-    ev_cs_ratio = 3,
     regular_profile = TRUE,
     # 4kW is the base capacity per CP as defined by "Slim laden voor iedereen 2022 - 2025"
     base_capacity = 4,
@@ -892,7 +885,7 @@ simulate <- function(
   } else{
     if (profile_type == "Electric Vehicle") {
       # Sample for each run annual energy demand based on historical EV data and predictions
-      annual_energy_demand <- sample_annual_endemand(profile_type, charging_location, n_runs, year, ev_cs_ratio)
+      annual_energy_demand <- sample_annual_endemand(charging_location, n_runs, year)
     } else {
       # Sample for each run annual energy demand based on the CS monthly energy distribution in the session data
       annual_energy_demand <- sample_annual_endemand_cs(sessions, n_runs)
