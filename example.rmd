@@ -1,7 +1,7 @@
 ---
 title: "Example of using the simulator"
 output: html_document
-date: "2023-10-10"
+date: "2024-02-12"
 ---
 
 ```{r setup, include=FALSE}
@@ -21,12 +21,23 @@ source("capacity_fractions.R")
 ```
 
 ```{r}
-create_capacity_fractions_netbewust_laden(as_datetime("2023-01-01"), as_datetime("2024-01-01"), times=list(
+# The following snippet will create a table of capacity fractions.
+# Two peak moments are defined: 7-9h and 17-23h.
+# The first peak moment has no pre- or post slope.
+# The second peak moment has a pre slope of 1h and a post slope of 7h.
+# This means that it takes 1h for the capacity to go down from max to base capacity,
+# and 7h for the capacity to go back from base to max.
+capacity_fractions <- create_capacity_fractions_netbewust_laden(as_datetime("2023-12-01"), as_datetime("2025-01-07"), times=list(
   list(floor_start=17, floor_end=23, pre_slope=1, post_slope=7),
   list(floor_start=7, floor_end=9, pre_slope=NULL, post_slope=NULL)
   )) %>%
-  filter(date_time >= "2023-01-01", date_time <= "2023-01-08") %>%
-  {plot_ly(x=.$date_time, y=.$value)}
+  filter(date_time >= "2023-12-25", date_time <= "2025-01-08")
+
+capacity_fractions
+ 
+capacity_fractions %>%
+  filter(date_time >= "2024-01-01", date_time <= "2024-01-03") %>%
+  plot_ly(x=~date_time, y=~value, type="scatter", mode="lines")
 ```
 
 
@@ -37,6 +48,7 @@ source("model.R")
 ```
 
 ```{r}
+# We load the sessions table
 sessions_path = "data/Input/public_combined/sessions.rds"
 sessions <- readRDS(sessions_path)
 sessions_week <- get_sessions_week(sessions, "Charging Station")
@@ -48,59 +60,78 @@ source("model.R")
 results <- simulate(
   sessions,
   sessions_week,
-  n_runs=15,
+  n_runs=10,
+  year = 2024,
   profile_type = "Charging Station",
   regular_profile = TRUE,
-  charging_location = "public"
+  charging_location = "public",
+  n_charging_points = 2,
+  seed = 12345
 )
 
 results
 ```
 
-
-
-## Some analyses of the results
-
 ```{r}
 results$individual %>%
-  mutate(month=month(date_time)) %>%
-  group_by(month, run_id) %>%
-  summarise(power_sum=sum(power)) %>%
-  mutate(
-    # As there are 4 intervals in an hour, we need to divide the power by 4 to get to the energy charged in kWh
-    energy_sum=power_sum / 4,
-  ) %>%
-  plot_ly(x=~month, y=~energy_sum, type="box")
-```
+  filter(run_id == 1) %>%
+  plot_ly(x=~date_time, y=~power, type="scatter", mode="lines")
 
-```{r}
-results$individual %>%
-  mutate(week_frac=lubridate::wday(date_time, week_start=1) + hour(date_time) / 24) %>%
-  group_by(week_frac) %>%
-  summarise(power=sum(power)) %>%
-  plot_ly(x=~week_frac, y=~power, mode="lines")
-```
+results$aggregated %>%
+  mutate(Time = strftime(date_time, "%H:%M")) %>%
+  group_by(Time) %>%
+  summarise(Power = mean(power)) %>%
+  plot_ly(x=~Time, y=~Power)
 
-```{r}
 results$individual %>%
   group_by(run_id) %>%
-  mutate(last_n=lag(n), wday=wday(date_time)) %>%
-  filter(last_n > 0, n == 0) %>%
-  plot_ly(x=~time)
+  # Each interval is 1h/4
+  summarise(Energy = sum(power) / 4) %>%
+  plot_ly(x=~run_id, y=~Energy, type="bar")
 ```
 
+
+## Elementary Analysis
+
+
+## Simulation with Smart Charging
+
 ```{r}
-results$individual %>%
-  group_by(time) %>%
-  summarise(
-    total_overcapacity=sum(pmax(0, overcapacity)),
-    total_not_charged=sum(not_charged_sum),
-  ) %>%
-  plot_ly(x=~time, y=~total_not_charged)
+source("model.R")
+
+results <- simulate(
+  sessions,
+  sessions_week,
+  n_runs=10,
+  year = 2024,
+  profile_type = "Charging Station",
+  charging_location = "public",
+  n_charging_points = 2,
+  seed = 12345,
+  regular_profile = FALSE,                 # This enables Smart Charging
+  capacity_fractions = capacity_fractions  # We use the capacity fractions previously defined
+)
+
+results
 ```
+
+## Elementary Analysis with Smart Charging active
 
 ```{r}
 results$individual %>%
   filter(run_id == 1) %>%
-  filter(n > 0)
+  plot_ly(x=~date_time, y=~power, type="scatter", mode="lines")
+
+results$aggregated %>%
+  mutate(Time = strftime(date_time, "%H:%M")) %>%
+  group_by(Time) %>%
+  summarise(Power = mean(power)) %>%
+  plot_ly(x=~Time, y=~Power)
+
+results$individual %>%
+  group_by(run_id) %>%
+  # Each interval is 1h/4
+  summarise(Energy = sum(power) / 4) %>%
+  plot_ly(x=~run_id, y=~Energy, type="bar")
 ```
+
