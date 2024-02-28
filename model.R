@@ -578,14 +578,12 @@ adjust_overlapping_sessions <- function(samples) {
 combine_simultaneous_sessions <- function(samples, profile_type, kW, n_charging_points) {
   if (profile_type == "Electric Vehicle") {
     samples <- samples %>%
-      select(
+      group_by(
         run_id,
-        card_id,
-        date_time,
-        power
-      ) %>% mutate(
-        n = 1
-      )
+        date_time
+      ) %>%
+      summarise(power = min(sum(power), kW)) %>%
+      mutate(n = 1)
   } else {
     samples <- samples %>%
       group_by(
