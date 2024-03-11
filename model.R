@@ -120,15 +120,16 @@ sample_annual_endemand <- function(charging_location, n_runs, year) {
 # Returns
 #   annual_energy_demand (double[]): vector containing annual energy demand samples 
 sample_annual_endemand_cs <- function(sessions, n_runs) {
+  # Get all monthly energies
   energy_per_month <- sessions %>%
     group_by(cs_id) %>%
-    arrange(desc(start_datetime)) %>%
     # We only take the most recent whole year
-    filter(start_datetime > start_datetime[1] - 3600 * 24 * 365) %>%
+    filter(start_datetime > pmax(start_datetime) - 3600 * 24 * 365) %>%
     mutate(month=month(start_datetime)) %>%
-    group_by(month, cs_id) %>%
-    summarise(energy_sum=sum(energy)) %>%
-    {.$energy_sum}
+    group_by(cs_id, month) %>%
+    summarise(energy=sum(energy)) %>%
+    ungroup() %>%
+    {.$energy}
   
   # Create a distribution of monthly energy sums and a CDF of the distribution
   density <- density(energy_per_month)
