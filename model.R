@@ -818,7 +818,7 @@ simulate <- function(
     }
   }
   if (charging_location %in% c("public") & !("cs_id" %in% colnames(sessions))) {
-    print("WARNING: Need to define `cs_id` when simulating home or work locations! Now using `cp_id`!")
+    print("WARNING: Need to define `cs_id` when simulating public locations! Now using `cp_id`!")
     sessions$cs_id <- sessions$cp_id
   }
   
@@ -901,7 +901,6 @@ simulate <- function(
       sessions, session_sample, n_runs, year, holidays, profile_type, annual_energy_demand
     )
   }
-  # return (session_sample)
   
   session_sample <- calculate_intervals(session_sample, kW)
   session_sample <- convert_samples(session_sample, kW, year, by)

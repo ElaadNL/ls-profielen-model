@@ -49,7 +49,7 @@ source("model.R")
 
 ```{r}
 # We load the sessions table
-sessions_path = "data/Input/public_combined/sessions.rds"
+sessions_path = "data/Input/home_combined/sessions.rds"
 sessions <- readRDS(sessions_path)
 sessions_week <- get_sessions_week(sessions, "Charging Station")
 ```
@@ -60,17 +60,19 @@ source("model.R")
 results <- simulate(
   sessions,
   sessions_week,
-  n_runs=10,
+  n_runs=100,
   year = 2024,
   profile_type = "Charging Station",
   regular_profile = TRUE,
-  charging_location = "public",
-  n_charging_points = 2,
+  charging_location = "home",
+  n_charging_points = 1,
   seed = 12345
 )
 
 results
 ```
+
+## Elementary analysis
 
 ```{r}
 results$individual %>%
@@ -89,9 +91,6 @@ results$individual %>%
   summarise(Energy = sum(power) / 4) %>%
   plot_ly(x=~run_id, y=~Energy, type="bar")
 ```
-
-
-## Elementary Analysis
 
 
 ## Simulation with Smart Charging
@@ -115,7 +114,7 @@ results <- simulate(
 results
 ```
 
-## Elementary Analysis with Smart Charging active
+### Elementary analysis with smart charging active
 
 ```{r}
 results$individual %>%
