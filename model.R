@@ -1,9 +1,13 @@
+update_date = "2024-03-01"
+
+
 library(data.table)
 library(dplyr)
 library(lubridate)
 library(MALDIquant)
 
 source("capacity_fractions.R")
+
 
 ### Historical session demand aggregated on weekly level ###
 # Description
@@ -172,10 +176,10 @@ sample_annual_endemand_dist <- function(n_runs, mean, sd = NULL) {
 
 ### Sample from seasonality distribution ###
 # Description
-# This function samples from a seasonality distribution table, which is based on the following datasets:
-# Den_Haag, EVnet, Jedlix and HTC_Eindhoven.
+# This function samples from a seasonal distribution based on the available datasets.
 # For each dataset we selected the 100 card IDs per year and week with the highest energy demand.
 # After that we normalized the weekly energy demand relative to the annual energy demand.
+# Then the mean is taken across all datasets and weeks.
 #
 # Args
 #   season_dist (dataframe): dataframe containing for each week the Q1 and Q3 values for power demand
