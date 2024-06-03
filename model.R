@@ -381,9 +381,8 @@ calculate_intervals <- function(samples, kW) {
   conversion <- data.frame(matrix(ncol = 2, nrow = 0))
   names(conversion) <- c("n_intervals", "energy")
   
-  # For sessions with a maximum of 4 intervals we assume a constant power rate.
-  # For longer sessions we calculate the number of intervals and energy based on the session power distribution
-  for (n_intervals in c(5:max_intervals)) {
+  # For all sessions we calculate the number of intervals and energy based on the session power distribution
+  for (n_intervals in c(1:max_intervals)) {
     # Add relative intervals to each session (1:n), and normalize them between 0 and 1
     intervals <- c(1:n_intervals)
     intervals <- intervals/n_intervals
@@ -399,10 +398,6 @@ calculate_intervals <- function(samples, kW) {
   samples <- arrange(samples, energy)
   idx <- match.closest(samples$energy, conversion$energy)
   samples$n_intervals <- conversion[idx,]$n_intervals
-  
-  # For sessions with a maximum of 4 intervals we assume a constant power rate
-  # The equation samples$energy <= kW also assumes that each interval has a length of 15 minutes
-  samples$n_intervals <- ifelse(samples$energy <= kW, ceiling(samples$energy/(kW/4)), samples$n_intervals)
   
   return (samples)
 }
